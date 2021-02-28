@@ -1,0 +1,29 @@
+[package]
+name = "epub"
+version = "0.1.0"
+authors = ["Greg Green <ggreen@bit-builder.com>"]
+edition = "2018"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+[features]
+example = ["fatfs/std", "fatfs/alloc", "fatfs/chrono", "byteorder/std"]
+
+[dependencies]
+heapless = "0.6"
+embedded-sdmmc = "0.3"
+miniz_oxide = "0.4"
+
+[dependencies.fatfs]
+#version = "0.3"
+default-features = false
+
+[dependencies.byteorder]
+version = "1"
+default-features = false
+
+[patch.crates-io]
+fatfs = { path = "../../rust-fatfs" }
+
+[dev-dependencies]
+fscommon = "0.1"
+mbr = "0.2"
