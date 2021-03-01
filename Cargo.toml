@@ -12,6 +12,7 @@ example = ["fatfs/std", "fatfs/alloc", "fatfs/chrono", "byteorder/std"]
 heapless = "0.6"
 embedded-sdmmc = "0.3"
 miniz_oxide = "0.4"
+log = "0.4"
 
 [dependencies.fatfs]
 #version = "0.3"
@@ -27,3 +28,4 @@ fatfs = { path = "../../rust-fatfs" }
 [dev-dependencies]
 fscommon = "0.1"
 mbr = "0.2"
+env_logger = "0.8"

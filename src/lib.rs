@@ -22,15 +22,18 @@ use alloc::vec::Vec;
 //use embedded_sdmmc::{
 //    BlockDevice, Controller, Error, File, Mode::ReadOnly, TimeSource, Volume, VolumeIdx,
 //};
-use fatfs::{File, FileSystem, OemCpConverter, Read, ReadWriteSeek, TimeProvider, Write};
+use core::str::Utf8Error;
+use fatfs::{FileSystem, OemCpConverter, ReadWriteSeek, TimeProvider, Write};
 use heapless::{consts::*, String};
-use miniz_oxide::inflate::{decompress_to_vec_with_limit, TINFLStatus};
+use miniz_oxide::inflate::TINFLStatus;
+
+use log;
+#[cfg(feature = "std")]
+use std::fmt;
 
 pub mod container;
 pub mod io;
-
-const EXPAND_DIR: &str = "CUR_BOOK";
-const EXPAND_EXT: &str = ".EXP";
+use container::LocalFileHeader;
 
 /// an error
 #[derive(Debug)]
@@ -38,6 +41,8 @@ pub enum EPubError<IO>
 where
     IO: ReadWriteSeek,
 {
+    ReadTruncated,
+    EmptyFile,
     InvalidLocalHeader,
     Unimplemented,
     FormatError(&'static str),
@@ -45,6 +50,7 @@ where
     PathTooLong,
     Decompress(TINFLStatus),
     IO(fatfs::Error<IO::Error>),
+    UTF8(Utf8Error),
 }
 
 /// An epub file
@@ -54,6 +60,8 @@ pub struct EPubFile {
 }
 
 impl EPubFile {
+    const EXPAND_DIR: &'static str = "CUR_BOOK";
+
     pub fn new(filepath: String<U256>) -> EPubFile {
         EPubFile { filepath }
     }
@@ -71,64 +79,65 @@ impl EPubFile {
             let dir = current_dir.open_dir(element);
             current_dir = dir.map_err(|e| EPubError::IO(e))?;
         }
-        let mut epub_file = current_dir
+        let epub_file = current_dir
             .open_file(filename.as_str())
             .map_err(|e| EPubError::IO(e))?;
 
         // now expand the file
-        let expanded_filepath = self.expanded_file_path()?;
         let root_dir = fs.root_dir();
-        let mut expanded_file = root_dir
-            .create_file(&expanded_filepath.as_str()[1..])
-            .map_err(|e| EPubError::IO(e))?;
-        expanded_file.truncate().map_err(|e| EPubError::IO(e))?;
-        // expand the file
+        let mut rdr = io::BufReader::new(epub_file);
+        if rdr.load_block()? == 0 {
+            return Err(EPubError::EmptyFile);
+        }
         loop {
-            let mut rdr = io::BufReader::new();
-            let ni = rdr.load_block(&mut epub_file)?;
-            if ni == 0 {
+            #[cfg(feature = "std")]
+            log::trace!("{:?}", rdr);
+            let signature = rdr.peek4()?;
+            log::trace!("Signature: {}", signature);
+            if LocalFileHeader::is_lfh(signature) {
+                let lfh = LocalFileHeader::read(&mut rdr)?;
+                if lfh.compression_method == 0 || lfh.compression_method == 8 {
+                    if lfh.is_file() {
+                        let filename = self.expanded_file_path(&lfh.file_name)?;
+                        let mut this_file = root_dir
+                            .create_file(&filename.as_str())
+                            .map_err(|e| EPubError::IO(e))?;
+                        this_file.truncate().map_err(|e| EPubError::IO(e))?;
+                        if lfh.compression_method == 8 {
+                            lfh.inflate(&mut rdr, &mut this_file)?;
+                        } else {
+                            // TODO: read all in at once
+                            for _i in 0..lfh.uncompressed_size {
+                                this_file
+                                    .write(&[rdr.read1()?])
+                                    .map_err(|e| EPubError::IO(e))?;
+                            }
+                        }
+                    } else if lfh.is_dir() {
+                        let dirname = self.expanded_file_path(&lfh.file_name)?;
+                        root_dir
+                            .create_dir(&dirname.as_str())
+                            .map_err(|e| EPubError::IO(e))?;
+                    }
+                }
+            } else {
                 break;
             }
-            let lfh = container::LocalFileHeader::read(&mut rdr)?;
         }
         Ok(())
     }
 
-    fn expanded_file_path<IO: ReadWriteSeek>(&self) -> Result<String<U256>, EPubError<IO>> {
-        let mut s: String<U256> = String::new();
-        s.push_str("/").map_err(|_e| EPubError::PathTooLong)?;
-        s.push_str(EXPAND_DIR)
-            .map_err(|_e| EPubError::PathTooLong)?;
-        s.push_str("/").map_err(|_e| EPubError::PathTooLong)?;
-        let (basename, _ext) = basename_and_ext(&self.filepath);
-        s.push_str(&basename).map_err(|_e| EPubError::PathTooLong)?;
-        s.push_str(EXPAND_EXT)
-            .map_err(|_e| EPubError::PathTooLong)?;
-        Ok(s)
-    }
-
-    /// decompress a buffer
-    fn decompress_chunk<IO: ReadWriteSeek, TP: TimeProvider, OCC: OemCpConverter>(
+    /// create a file path, with the given filename
+    fn expanded_file_path<IO: ReadWriteSeek>(
         &self,
-        count: &mut usize,
-        buf: &[u8],
-        output: &mut File<IO, TP, OCC>,
-    ) -> Result<usize, EPubError<IO>> {
-        let mut buf_len = 0;
-        loop {
-            buf_len += 1024;
-            match decompress_to_vec_with_limit(buf, buf_len) {
-                Ok(vec) => {
-                    *count += vec.len();
-                    return output
-                        .write(vec.as_slice())
-                        .map_err(|x| EPubError::<IO>::IO(x));
-                }
-                Err(TINFLStatus::Done) => return Ok(0),
-                Err(TINFLStatus::HasMoreOutput) => continue,
-                Err(e) => return Err(EPubError::<IO>::Decompress(e)),
-            };
-        }
+        fname: &String<U256>,
+    ) -> Result<String<U256>, EPubError<IO>> {
+        let mut s: String<U256> = String::new();
+        s.push_str(EPubFile::EXPAND_DIR)
+            .map_err(|_e| EPubError::PathTooLong)?;
+        s.push_str("/").map_err(|_e| EPubError::PathTooLong)?;
+        s.push_str(fname).map_err(|_e| EPubError::PathTooLong)?;
+        Ok(s)
     }
 }
 

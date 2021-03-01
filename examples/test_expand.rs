@@ -18,15 +18,22 @@
 
 const FILE_TO_PRINT: &'static str = "README.TXT";
 
-use epub::{io::BufReader, EPubFile};
-use fatfs::{Error, ReadWriteSeek};
+use epub::EPubFile;
 use fscommon::{BufStream, StreamSlice};
 use heapless::{consts::*, String};
 use mbr;
+//use std::env;
 use std::io::prelude::*;
 use std::path::PathBuf;
 
+use env_logger::{Builder, Target};
+
 fn main() {
+    let mut builder = Builder::from_default_env();
+    builder.target(Target::Stdout);
+
+    builder.init();
+
     let mut args = std::env::args().skip(1);
     let filename = args.next().unwrap_or("/dev/sdd1".into());
     println!("Using filename: {:?}", filename);
@@ -43,7 +50,7 @@ fn main() {
         println!("Partition {}: {:?}", i, p);
     }
 
-    let mut img_file = std::fs::OpenOptions::new()
+    let img_file = std::fs::OpenOptions::new()
         .read(true)
         .write(true)
         .open(filename)
