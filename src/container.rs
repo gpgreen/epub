@@ -2,7 +2,7 @@ use crate::io::BufReader;
 use crate::EPubError;
 use fatfs::{File, FileSystem, OemCpConverter, ReadWriteSeek, TimeProvider, Write};
 use heapless::{consts::*, String, Vec};
-use miniz_oxide::inflate::{decompress_to_vec_with_limit, TINFLStatus};
+use miniz_oxide::inflate::{core, TINFLStatus};
 
 use log::{info, trace};
 #[cfg(feature = "std")]
@@ -125,24 +125,64 @@ impl LocalFileHeader {
     pub fn inflate<IO: ReadWriteSeek, TP: TimeProvider, OCC: OemCpConverter>(
         &self,
         rdr: &mut BufReader<IO, TP, OCC>,
-        output: &mut File<IO, TP, OCC>,
+        output_file: &mut File<IO, TP, OCC>,
     ) -> Result<usize, EPubError<IO>> {
-        let mut buf: [u8; 256] = [0u8; 256];
-        trace!("inflate {} bytes", self.compressed_size);
-        if self.compressed_size > 256 {
-            return Err(EPubError::ReadTruncated);
-        }
-        for i in 0..self.compressed_size as usize {
-            buf[i] = rdr.read1()?;
-        }
+        let mut input: [u8; 32768] = [0; 32768];
+        let mut output: [u8; 32768] = [0; 32768];
+        let mut decomp = core::DecompressorOxide::new();
+        decomp.init();
+        info!(
+            "inflate {} bytes to {} bytes",
+            self.compressed_size, self.uncompressed_size
+        );
         let mut count = 0;
-        let res = decompress_chunk(&mut count, &buf, output);
+        let mut bytes_to_go = self.compressed_size as usize;
+        while bytes_to_go > 0 {
+            let (n, flags) = if bytes_to_go > 32768 {
+                (32768, core::inflate_flags::TINFL_FLAG_HAS_MORE_INPUT)
+            } else {
+                (bytes_to_go, 0)
+            };
+            trace!("inflate {} byte chunk", n);
+            for i in 0..n {
+                input[i] = rdr.read1()?;
+            }
+            let mut do_it = true;
+            let mut start = 0;
+            while do_it {
+                // following should loop until all input consumed
+                let (status, in_consumed, out_consumed) =
+                    core::decompress(&mut decomp, &input[start..n], &mut output, 0, flags);
+                match status {
+                    TINFLStatus::NeedsMoreInput | TINFLStatus::Done => {
+                        trace!("done with inflate input chunk");
+                        do_it = false;
+                    }
+                    TINFLStatus::HasMoreOutput => {
+                        trace!("inflate has more output");
+                        start += in_consumed;
+                    }
+                    e => return Err(EPubError::Decompress(e)),
+                }
+                trace!(
+                    "inflated incoming {} bytes created {} outgoing bytes",
+                    in_consumed,
+                    out_consumed
+                );
+
+                let outb = output_file
+                    .write(&output[..out_consumed])
+                    .map_err(|x| EPubError::<IO>::IO(x))?;
+                count += out_consumed;
+            }
+            bytes_to_go -= n;
+        }
         trace!(
-            "inflated to {} bytes, s/b {}",
+            "total inflated {} bytes, expected {}",
             count,
             self.uncompressed_size
         );
-        res
+        Ok(count)
     }
 }
 
@@ -159,29 +199,6 @@ fn extract_string_256<IO: ReadWriteSeek, TP: TimeProvider, OCC: OemCpConverter>(
         return Err(EPubError::ReadTruncated);
     }
     Ok(String::from_utf8(v).map_err(|e| EPubError::UTF8(e))?)
-}
-
-/// decompress a buffer
-fn decompress_chunk<IO: ReadWriteSeek, TP: TimeProvider, OCC: OemCpConverter>(
-    count: &mut usize,
-    buf: &[u8],
-    output: &mut File<IO, TP, OCC>,
-) -> Result<usize, EPubError<IO>> {
-    let mut buf_len = 0;
-    loop {
-        buf_len += 1024;
-        match decompress_to_vec_with_limit(buf, buf_len) {
-            Ok(vec) => {
-                *count += vec.len();
-                return output
-                    .write(vec.as_slice())
-                    .map_err(|x| EPubError::<IO>::IO(x));
-            }
-            Err(TINFLStatus::Done) => return Ok(0),
-            Err(TINFLStatus::HasMoreOutput) => continue,
-            Err(e) => return Err(EPubError::<IO>::Decompress(e)),
-        };
-    }
 }
 
 #[cfg(test)]

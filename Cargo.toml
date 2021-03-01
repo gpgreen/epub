@@ -29,3 +29,9 @@ fatfs = { path = "../../rust-fatfs" }
 fscommon = "0.1"
 mbr = "0.2"
 env_logger = "0.8"
+
+[profile.dev]
+panic = "abort"
+
+[profile.release]
+panic = "abort"

@@ -27,6 +27,8 @@ where
     cursor: usize,
     /// has any data been loaded yet
     loaded: bool,
+    /// peek has rolled over the boundary
+    peek_rolled: bool,
 }
 
 #[cfg(feature = "std")]
@@ -58,16 +60,22 @@ where
         let block_idx = 0;
         let cursor = 0;
         let loaded = false;
+        let peek_rolled = false;
         BufReader {
             file,
             blocks,
             block_idx,
             cursor,
             loaded,
+            peek_rolled,
         }
     }
 
     pub fn load_block(&mut self) -> Result<usize, EPubError<IO>> {
+        if self.peek_rolled {
+            self.peek_rolled = false;
+            return Ok(0);
+        }
         trace!("Loading Block into position {}", self.block_idx ^ 1);
         let buf = if self.loaded {
             if self.block_idx == 0 {
@@ -83,22 +91,23 @@ where
     }
 
     pub fn read1(&mut self) -> Result<u8, EPubError<IO>> {
-        trace!("read1 byte at {}:{}", self.block_idx, self.cursor);
         if self.cursor < BUFBLOCKSIZE {
             self.cursor += 1;
+            trace!("read1 byte at {}:{}", self.block_idx, self.cursor - 1);
             Ok(self.blocks[self.block_idx][self.cursor - 1])
         } else {
             trace!("read1 block rollover");
             self.load_block()?;
             self.block_idx ^= 1;
             self.cursor = 1;
+            trace!("read1 byte at {}:{}", self.block_idx, self.cursor - 1);
             Ok(self.blocks[self.block_idx][0])
         }
     }
 
     pub fn read2(&mut self) -> Result<u16, EPubError<IO>> {
         trace!("read2 bytes at {}:{}", self.block_idx, self.cursor);
-        if self.cursor + 2 < BUFBLOCKSIZE {
+        if self.cursor + 2 <= BUFBLOCKSIZE {
             self.cursor += 2;
             Ok(LittleEndian::read_u16(
                 &self.blocks[self.block_idx][self.cursor - 2..self.cursor],
@@ -124,20 +133,20 @@ where
 
     pub fn read4(&mut self) -> Result<u32, EPubError<IO>> {
         trace!("read4 bytes at {}:{}", self.block_idx, self.cursor);
-        if self.cursor + 4 < BUFBLOCKSIZE {
+        if self.cursor + 4 <= BUFBLOCKSIZE {
             self.cursor += 4;
             Ok(LittleEndian::read_u32(
                 &self.blocks[self.block_idx][self.cursor - 4..self.cursor],
             ))
         } else {
             trace!("read4 block rollover");
-            self.roll_over_4(true)
+            self.roll_over_4(false)
         }
     }
 
     pub fn peek4(&mut self) -> Result<u32, EPubError<IO>> {
         trace!("peek4 bytes at {}:{}", self.block_idx, self.cursor);
-        if self.cursor + 4 < BUFBLOCKSIZE {
+        if self.cursor + 4 <= BUFBLOCKSIZE {
             Ok(LittleEndian::read_u32(
                 &self.blocks[self.block_idx][self.cursor..self.cursor + 4],
             ))
@@ -153,7 +162,7 @@ where
         let j = BUFBLOCKSIZE - self.cursor;
         let mut tmpbuf: [u8; 4] = [0u8; 4];
         trace!(
-            "read {} bytes starting at {}:{}",
+            "read4 {} bytes starting at {}:{}",
             j,
             self.block_idx,
             self.cursor
@@ -162,13 +171,14 @@ where
             tmpbuf[i] = self.blocks[self.block_idx][self.cursor + i];
         }
         self.block_idx ^= 1;
-        trace!("read {} bytes starting at {}:{}", 4 - j, self.block_idx, 0);
+        trace!("read4 {} bytes starting at {}:{}", 4 - j, self.block_idx, 0);
         for i in 0..4 - j {
             tmpbuf[i + j] = self.blocks[self.block_idx][i];
         }
         if !peek {
-            self.cursor = j;
+            self.cursor = 4 - j;
         } else {
+            self.peek_rolled = true;
             self.block_idx ^= 1;
         }
         Ok(LittleEndian::read_u32(&tmpbuf))
@@ -185,17 +195,20 @@ where
                 v.push(self.blocks[self.block_idx][self.cursor + i])
                     .unwrap();
             }
+            trace!("read {} bytes at {}:{}", n, self.block_idx, self.cursor);
             self.cursor += n;
             Ok((n, v))
         } else {
             trace!("read block rollover");
             self.load_block()?;
             let j = BUFBLOCKSIZE - self.cursor;
+            trace!("read {} bytes at {}:{}", j, self.block_idx, self.cursor);
             for i in 0..j {
                 v.push(self.blocks[self.block_idx][self.cursor + i])
                     .unwrap();
             }
             self.block_idx ^= 1;
+            trace!("read {} bytes at {}:{}", n - j, self.block_idx, 0);
             for i in 0..n - j {
                 v.push(self.blocks[self.block_idx][i]).unwrap();
             }

@@ -93,7 +93,7 @@ impl EPubFile {
             #[cfg(feature = "std")]
             log::trace!("{:?}", rdr);
             let signature = rdr.peek4()?;
-            log::trace!("Signature: {}", signature);
+            log::trace!("Signature: {:x}", signature);
             if LocalFileHeader::is_lfh(signature) {
                 let lfh = LocalFileHeader::read(&mut rdr)?;
                 if lfh.compression_method == 0 || lfh.compression_method == 8 {
