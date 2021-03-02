@@ -1,6 +1,6 @@
 use crate::io::BufReader;
 use crate::EPubError;
-use fatfs::{File, FileSystem, OemCpConverter, ReadWriteSeek, TimeProvider, Write};
+use fatfs::{File, OemCpConverter, ReadWriteSeek, TimeProvider, Write};
 use heapless::{consts::*, String, Vec};
 use miniz_oxide::inflate::{core, TINFLStatus};
 
@@ -83,18 +83,14 @@ impl LocalFileHeader {
         let file_name = extract_string_256(rdr, file_name_length as usize)?;
         let extra_field = if extra_field_length > 0 {
             let mut fieldvec = Vec::new();
-            let mut data_left = extra_field_length;
+            let mut data_left = extra_field_length as usize;
             while data_left > 0 {
                 let id = rdr.read2()?;
-                let data_len = rdr.read2()?;
-                let mut data = Vec::new();
-                if data_len as usize > data.capacity() {
+                let data_len = rdr.read2()? as usize;
+                if data_len > 256 {
                     return Err(EPubError::ReadTruncated);
                 }
-                // TODO: read the whole thing at once
-                for _i in 0..data_len {
-                    data.push(rdr.read1()?).unwrap();
-                }
+                let data = Vec::from_slice(&rdr.read(data_len)?).unwrap();
                 let ef = ExtraHeader { id, data };
                 fieldvec.push(ef).map_err(|_| EPubError::ReadTruncated)?;
                 data_left -= data_len + 4;
@@ -144,8 +140,11 @@ impl LocalFileHeader {
                 (bytes_to_go, 0)
             };
             trace!("inflate {} byte chunk", n);
-            for i in 0..n {
-                input[i] = rdr.read1()?;
+            let mut i = 0;
+            while i < n {
+                let end = if i + 512 < n { i + 512 } else { n };
+                rdr.read512_to_array(&mut input[i..end])?;
+                i += 512;
             }
             let mut do_it = true;
             let mut start = 0;
@@ -170,7 +169,7 @@ impl LocalFileHeader {
                     out_consumed
                 );
 
-                let outb = output_file
+                output_file
                     .write(&output[..out_consumed])
                     .map_err(|x| EPubError::<IO>::IO(x))?;
                 count += out_consumed;
@@ -194,8 +193,8 @@ fn extract_string_256<IO: ReadWriteSeek, TP: TimeProvider, OCC: OemCpConverter>(
     if nbytes > 256 {
         return Err(EPubError::ReadTruncated);
     }
-    let (n, v) = rdr.read(nbytes)?;
-    if n < nbytes {
+    let v = rdr.read(nbytes)?;
+    if v.len() < nbytes {
         return Err(EPubError::ReadTruncated);
     }
     Ok(String::from_utf8(v).map_err(|e| EPubError::UTF8(e))?)

@@ -12,28 +12,19 @@
 // ****************************************************************************
 #![no_std]
 
-#[cfg(feature = "alloc")]
-extern crate alloc;
+pub mod container;
+pub mod io;
 
-/// Vec requires alloc
-#[cfg(feature = "alloc")]
-use alloc::vec::Vec;
-
-//use embedded_sdmmc::{
-//    BlockDevice, Controller, Error, File, Mode::ReadOnly, TimeSource, Volume, VolumeIdx,
-//};
+use container::LocalFileHeader;
 use core::str::Utf8Error;
 use fatfs::{FileSystem, OemCpConverter, ReadWriteSeek, TimeProvider, Write};
 use heapless::{consts::*, String};
+use io::split_path;
 use miniz_oxide::inflate::TINFLStatus;
 
-use log;
+use log::info;
 #[cfg(feature = "std")]
 use std::fmt;
-
-pub mod container;
-pub mod io;
-use container::LocalFileHeader;
 
 /// an error
 #[derive(Debug)]
@@ -62,6 +53,7 @@ pub struct EPubFile {
 impl EPubFile {
     const EXPAND_DIR: &'static str = "CUR_BOOK";
 
+    /// create EPubFile with a filename path
     pub fn new(filepath: String<U256>) -> EPubFile {
         EPubFile { filepath }
     }
@@ -96,24 +88,31 @@ impl EPubFile {
             log::trace!("Signature: {:x}", signature);
             if LocalFileHeader::is_lfh(signature) {
                 let lfh = LocalFileHeader::read(&mut rdr)?;
+                if lfh.general_purpose_flag != 0 {
+                    return Err(EPubError::Unimplemented);
+                }
                 if lfh.compression_method == 0 || lfh.compression_method == 8 {
                     if lfh.is_file() {
+                        info!("Create file {}", lfh.file_name);
                         let filename = self.expanded_file_path(&lfh.file_name)?;
                         let mut this_file = root_dir
                             .create_file(&filename.as_str())
                             .map_err(|e| EPubError::IO(e))?;
                         this_file.truncate().map_err(|e| EPubError::IO(e))?;
+                        // write the file, either compressed or not
                         if lfh.compression_method == 8 {
                             lfh.inflate(&mut rdr, &mut this_file)?;
                         } else {
-                            // TODO: read all in at once
-                            for _i in 0..lfh.uncompressed_size {
-                                this_file
-                                    .write(&[rdr.read1()?])
-                                    .map_err(|e| EPubError::IO(e))?;
+                            let mut bytes_to_go = lfh.uncompressed_size as usize;
+                            while bytes_to_go > 0 {
+                                let n = if bytes_to_go > 256 { 256 } else { bytes_to_go };
+                                let v = rdr.read(n)?;
+                                this_file.write(&v).map_err(|e| EPubError::IO(e))?;
+                                bytes_to_go -= v.len();
                             }
                         }
                     } else if lfh.is_dir() {
+                        info!("Create directory {}", lfh.file_name);
                         let dirname = self.expanded_file_path(&lfh.file_name)?;
                         root_dir
                             .create_dir(&dirname.as_str())
@@ -138,96 +137,5 @@ impl EPubFile {
         s.push_str("/").map_err(|_e| EPubError::PathTooLong)?;
         s.push_str(fname).map_err(|_e| EPubError::PathTooLong)?;
         Ok(s)
-    }
-}
-
-/// function to take a path, return the basename and the extension
-/// of the filename in the path. All leading directories are stripped
-/// from the basename
-fn basename_and_ext(path: &String<U256>) -> (String<U8>, String<U4>) {
-    let base_and_ext = split_path(path).pop().unwrap();
-    let mut base: heapless::Vec<u8, U8> = heapless::Vec::new();
-    let mut ext: heapless::Vec<u8, U4> = heapless::Vec::new();
-    let mut switch = false;
-    for byte in base_and_ext.into_bytes().iter() {
-        if *byte != b'.' && !switch {
-            base.push(*byte).unwrap();
-        } else {
-            switch = true;
-            ext.push(*byte).unwrap();
-        }
-    }
-    (
-        String::from_utf8(base).unwrap(),
-        String::from_utf8(ext).unwrap(),
-    )
-}
-
-/// function to split paths up into directory(s) and filename
-/// the separator is the MSDOS separator '\'
-fn split_path(path: &String<U256>) -> heapless::Vec<String<U12>, U8> {
-    let bytes = path.clone().into_bytes();
-    let mut path_elements: heapless::Vec<String<U12>, U8> = heapless::Vec::new();
-    let mut element: String<U12> = String::new();
-    for (i, &byte) in bytes.iter().enumerate() {
-        if byte != b'/' {
-            element.push(byte as char).unwrap();
-        } else if i != 0 {
-            path_elements.push(element).unwrap();
-            element = String::new();
-        }
-    }
-    if element.len() > 0 {
-        path_elements.push(element).unwrap();
-    }
-    path_elements
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_split_path() {
-        let s: String<U256> = String::from("\\this\\path\\is\\here.txt");
-        let vec = split_path(&s);
-        assert_eq!(vec.len(), 4);
-        assert_eq!(vec[0], "this");
-        assert_eq!(vec[1], "path");
-        assert_eq!(vec[2], "is");
-        assert_eq!(vec[3], "here.txt");
-    }
-
-    #[test]
-    fn test_split_path_start() {
-        let s: String<U256> = String::from("here.txt");
-        let vec = split_path(&s);
-        assert_eq!(vec.len(), 1);
-        assert_eq!(vec[0], "here.txt");
-    }
-
-    #[test]
-    fn test_split_path_end() {
-        let s: String<U256> = String::from("\\start\\end\\");
-        let vec = split_path(&s);
-        assert_eq!(vec.len(), 2);
-        assert_eq!(vec[0], "start");
-        assert_eq!(vec[1], "end");
-    }
-
-    #[test]
-    fn test_extension() {
-        let s: String<U256> = String::from("\\a\\start\\end.txt");
-        let (base_vec, ext_vec) = basename_and_ext(&s);
-        assert_eq!(base_vec, "end");
-        assert_eq!(ext_vec, ".txt");
-    }
-
-    #[test]
-    fn test_no_extension() {
-        let s: String<U256> = String::from("\\start\\end");
-        let (base_vec, ext_vec) = basename_and_ext(&s);
-        assert_eq!(base_vec, "end");
-        assert_eq!(ext_vec.len(), 0);
     }
 }

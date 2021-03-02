@@ -1,7 +1,7 @@
 use crate::EPubError;
 use byteorder::{ByteOrder, LittleEndian};
 use fatfs::{File, OemCpConverter, Read, ReadWriteSeek, TimeProvider};
-use heapless::{consts::*, Vec};
+use heapless::{consts::*, String, Vec};
 
 use log::{info, trace};
 #[cfg(feature = "std")]
@@ -53,7 +53,7 @@ where
     OCC: OemCpConverter,
 {
     pub fn new(file: File<IO, TP, OCC>) -> BufReader<IO, TP, OCC> {
-        trace!("Creating BufReader");
+        info!("Creating BufReader");
         let mut blocks = Vec::new();
         blocks.push([0u8; BUFBLOCKSIZE]).unwrap();
         blocks.push([0u8; BUFBLOCKSIZE]).unwrap();
@@ -184,36 +184,76 @@ where
         Ok(LittleEndian::read_u32(&tmpbuf))
     }
 
-    pub fn read(&mut self, n: usize) -> Result<(usize, Vec<u8, U256>), EPubError<IO>> {
-        trace!("read {} bytes at {}:{}", n, self.block_idx, self.cursor);
+    pub fn read(&mut self, n: usize) -> Result<Vec<u8, U256>, EPubError<IO>> {
         if n > 256 {
             return Err(EPubError::ReadTruncated);
         };
-        let mut v = Vec::new();
         if self.cursor + n < BUFBLOCKSIZE {
-            for i in 0..n {
-                v.push(self.blocks[self.block_idx][self.cursor + i])
-                    .unwrap();
-            }
+            let v = Vec::from_slice(&self.blocks[self.block_idx][self.cursor..self.cursor + n])
+                .unwrap();
             trace!("read {} bytes at {}:{}", n, self.block_idx, self.cursor);
             self.cursor += n;
-            Ok((n, v))
+            Ok(v)
         } else {
+            let mut v = Vec::new();
             trace!("read block rollover");
             self.load_block()?;
             let j = BUFBLOCKSIZE - self.cursor;
             trace!("read {} bytes at {}:{}", j, self.block_idx, self.cursor);
-            for i in 0..j {
-                v.push(self.blocks[self.block_idx][self.cursor + i])
-                    .unwrap();
-            }
+            v.extend_from_slice(&self.blocks[self.block_idx][self.cursor..])
+                .unwrap();
             self.block_idx ^= 1;
             trace!("read {} bytes at {}:{}", n - j, self.block_idx, 0);
+            v.extend_from_slice(&self.blocks[self.block_idx][..n - j])
+                .unwrap();
+            self.cursor = n - j;
+            Ok(v)
+        }
+    }
+
+    /// read 512 bytes into an array
+    pub fn read512_to_array(&mut self, arr: &mut [u8]) -> Result<(), EPubError<IO>> {
+        let n = arr.len();
+        if n > 512 {
+            return Err(EPubError::ReadTruncated);
+        };
+        if self.cursor + n < BUFBLOCKSIZE {
+            for i in 0..n {
+                arr[i] = self.blocks[self.block_idx][self.cursor + i];
+            }
+            trace!(
+                "read512_to_array {} bytes at {}:{}",
+                n,
+                self.block_idx,
+                self.cursor
+            );
+            self.cursor += n;
+            Ok(())
+        } else {
+            trace!("read block rollover");
+            self.load_block()?;
+            let j = BUFBLOCKSIZE - self.cursor;
+            trace!(
+                "read512_to_array {} bytes at {}:{}",
+                j,
+                self.block_idx,
+                self.cursor
+            );
+            for i in 0..j {
+                arr[i] = self.blocks[self.block_idx][self.cursor + i];
+            }
+            self.block_idx ^= 1;
+            trace!(
+                "read512_to_array {} bytes at {}:{}",
+                n - j,
+                self.block_idx,
+                0
+            );
             for i in 0..n - j {
-                v.push(self.blocks[self.block_idx][i]).unwrap();
+                arr[i + j] = self.blocks[self.block_idx][i];
             }
             self.cursor = n - j;
-            Ok((n, v))
+            Ok(())
         }
     }
 
@@ -353,4 +393,95 @@ pub fn get_partition<IO: ReadWriteSeek, TP: TimeProvider, OCC: OemCpConverter>(
         lba_start,
         num_blocks,
     })
+}
+
+/// function to take a path, return the basename and the extension
+/// of the filename in the path. All leading directories are stripped
+/// from the basename
+pub fn basename_and_ext(path: &String<U256>) -> (String<U8>, String<U4>) {
+    let base_and_ext = split_path(path).pop().unwrap();
+    let mut base: heapless::Vec<u8, U8> = heapless::Vec::new();
+    let mut ext: heapless::Vec<u8, U4> = heapless::Vec::new();
+    let mut switch = false;
+    for byte in base_and_ext.into_bytes().iter() {
+        if *byte != b'.' && !switch {
+            base.push(*byte).unwrap();
+        } else {
+            switch = true;
+            ext.push(*byte).unwrap();
+        }
+    }
+    (
+        String::from_utf8(base).unwrap(),
+        String::from_utf8(ext).unwrap(),
+    )
+}
+
+/// function to split paths up into directory(s) and filename
+/// the separator is the MSDOS separator '\'
+pub fn split_path(path: &String<U256>) -> heapless::Vec<String<U12>, U8> {
+    let bytes = path.clone().into_bytes();
+    let mut path_elements: heapless::Vec<String<U12>, U8> = heapless::Vec::new();
+    let mut element: String<U12> = String::new();
+    for (i, &byte) in bytes.iter().enumerate() {
+        if byte != b'/' {
+            element.push(byte as char).unwrap();
+        } else if i != 0 {
+            path_elements.push(element).unwrap();
+            element = String::new();
+        }
+    }
+    if element.len() > 0 {
+        path_elements.push(element).unwrap();
+    }
+    path_elements
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_split_path() {
+        let s: String<U256> = String::from("/this/path/is/here.txt");
+        let vec = split_path(&s);
+        assert_eq!(vec.len(), 4);
+        assert_eq!(vec[0], "this");
+        assert_eq!(vec[1], "path");
+        assert_eq!(vec[2], "is");
+        assert_eq!(vec[3], "here.txt");
+    }
+
+    #[test]
+    fn test_split_path_start() {
+        let s: String<U256> = String::from("here.txt");
+        let vec = split_path(&s);
+        assert_eq!(vec.len(), 1);
+        assert_eq!(vec[0], "here.txt");
+    }
+
+    #[test]
+    fn test_split_path_end() {
+        let s: String<U256> = String::from("/start/end/");
+        let vec = split_path(&s);
+        assert_eq!(vec.len(), 2);
+        assert_eq!(vec[0], "start");
+        assert_eq!(vec[1], "end");
+    }
+
+    #[test]
+    fn test_extension() {
+        let s: String<U256> = String::from("/a/start/end.txt");
+        let (base_vec, ext_vec) = basename_and_ext(&s);
+        assert_eq!(base_vec, "end");
+        assert_eq!(ext_vec, ".txt");
+    }
+
+    #[test]
+    fn test_no_extension() {
+        let s: String<U256> = String::from("/start/end");
+        let (base_vec, ext_vec) = basename_and_ext(&s);
+        assert_eq!(base_vec, "end");
+        assert_eq!(ext_vec.len(), 0);
+    }
 }
