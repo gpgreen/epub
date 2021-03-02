@@ -14,6 +14,7 @@
 
 pub mod container;
 pub mod io;
+pub mod mbr;
 
 use container::LocalFileHeader;
 use core::str::Utf8Error;

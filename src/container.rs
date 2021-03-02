@@ -152,6 +152,12 @@ impl LocalFileHeader {
                 // following should loop until all input consumed
                 let (status, in_consumed, out_consumed) =
                     core::decompress(&mut decomp, &input[start..n], &mut output, 0, flags);
+                trace!(
+                    "inflate status {:?} incoming {} bytes outgoing {} bytes",
+                    status,
+                    in_consumed,
+                    out_consumed
+                );
                 match status {
                     TINFLStatus::NeedsMoreInput | TINFLStatus::Done => {
                         trace!("done with inflate input chunk");
@@ -163,15 +169,16 @@ impl LocalFileHeader {
                     }
                     e => return Err(EPubError::Decompress(e)),
                 }
-                trace!(
-                    "inflated incoming {} bytes created {} outgoing bytes",
-                    in_consumed,
-                    out_consumed
-                );
 
-                output_file
-                    .write(&output[..out_consumed])
-                    .map_err(|x| EPubError::<IO>::IO(x))?;
+                let mut write_start = 0;
+                while write_start < out_consumed {
+                    let n = output_file
+                        .write(&output[write_start..out_consumed])
+                        .map_err(|x| EPubError::<IO>::IO(x))?;
+                    trace!("wrote {} bytes to file", n,);
+                    write_start += n;
+                }
+                output_file.flush().map_err(|e| EPubError::<IO>::IO(e))?;
                 count += out_consumed;
             }
             bytes_to_go -= n;
