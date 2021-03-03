@@ -21,13 +21,11 @@ where
     file: File<'a, IO, TP, OCC>,
     /// the block buffers
     blocks: Vec<[u8; 512], U2>,
-    /// which buffer is the cursor in
+    /// which block buffer is the cursor in
     block_idx: usize,
     /// the cursor position in the block_idx buffer
     cursor: usize,
-    /// has any data been loaded yet
-    loaded: bool,
-    /// peek has rolled over the boundary
+    /// peek has rolled over the boundary, so don't load a new block
     peek_rolled: bool,
 }
 
@@ -52,44 +50,44 @@ where
     TP: TimeProvider,
     OCC: OemCpConverter,
 {
-    pub fn new(file: File<IO, TP, OCC>) -> BufReader<IO, TP, OCC> {
+    /// create a BufReader attached to the file
+    pub fn new(file: File<IO, TP, OCC>) -> Result<BufReader<IO, TP, OCC>, EPubError<IO>> {
         info!("Creating BufReader");
         let mut blocks = Vec::new();
         blocks.push([0u8; BUFBLOCKSIZE]).unwrap();
         blocks.push([0u8; BUFBLOCKSIZE]).unwrap();
-        let block_idx = 0;
+        // start out with this idx, so 0 position is loaded below
+        let block_idx = 1;
         let cursor = 0;
-        let loaded = false;
         let peek_rolled = false;
-        BufReader {
+        let mut rdr = BufReader {
             file,
             blocks,
             block_idx,
             cursor,
-            loaded,
             peek_rolled,
-        }
+        };
+        rdr.load_block()?;
+        rdr.block_idx = 0;
+        Ok(rdr)
     }
 
-    pub fn load_block(&mut self) -> Result<usize, EPubError<IO>> {
+    /// load a block into a buffer slot
+    fn load_block(&mut self) -> Result<usize, EPubError<IO>> {
         if self.peek_rolled {
             self.peek_rolled = false;
             return Ok(0);
         }
         trace!("Loading Block into position {}", self.block_idx ^ 1);
-        let buf = if self.loaded {
-            if self.block_idx == 0 {
-                &mut self.blocks[1]
-            } else {
-                &mut self.blocks[0]
-            }
+        let buf = if self.block_idx == 0 {
+            &mut self.blocks[1]
         } else {
-            self.loaded = true;
             &mut self.blocks[0]
         };
         self.file.read(buf).map_err(|e| EPubError::IO(e))
     }
 
+    /// read 1 byte from file
     pub fn read1(&mut self) -> Result<u8, EPubError<IO>> {
         if self.cursor < BUFBLOCKSIZE {
             self.cursor += 1;
@@ -105,6 +103,7 @@ where
         }
     }
 
+    /// read 2 bytes from file
     pub fn read2(&mut self) -> Result<u16, EPubError<IO>> {
         if self.cursor + 2 <= BUFBLOCKSIZE {
             trace!("read2 bytes at {}:{}", self.block_idx, self.cursor);
@@ -139,6 +138,7 @@ where
         }
     }
 
+    /// read 4 bytes from file
     pub fn read4(&mut self) -> Result<u32, EPubError<IO>> {
         if self.cursor + 4 <= BUFBLOCKSIZE {
             self.cursor += 4;
@@ -152,6 +152,7 @@ where
         }
     }
 
+    /// peek at next 4 bytes from file
     pub fn peek4(&mut self) -> Result<u32, EPubError<IO>> {
         if self.cursor + 4 <= BUFBLOCKSIZE {
             trace!("peek4 bytes at {}:{}", self.block_idx, self.cursor);
@@ -197,6 +198,7 @@ where
         Ok(LittleEndian::read_u32(&tmpbuf))
     }
 
+    /// read 256 bytes from file, return as Vec
     pub fn read(&mut self, n: usize) -> Result<Vec<u8, U256>, EPubError<IO>> {
         if n > 256 {
             return Err(EPubError::ReadTruncated);
@@ -224,7 +226,7 @@ where
         }
     }
 
-    /// read 512 bytes into an array
+    /// read 512 bytes from file into an array
     pub fn read512_to_array(&mut self, arr: &mut [u8]) -> Result<(), EPubError<IO>> {
         let n = arr.len();
         if n > 512 {
@@ -270,6 +272,7 @@ where
         }
     }
 
+    /// get a copy of the current block
     pub fn get_block(&self) -> Vec<u8, U512> {
         Vec::<u8, U512>::from_slice(&self.blocks[self.block_idx]).unwrap()
     }

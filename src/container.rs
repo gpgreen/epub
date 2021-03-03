@@ -1,6 +1,6 @@
 use crate::io::BufReader;
 use crate::EPubError;
-use fatfs::{File, OemCpConverter, ReadWriteSeek, TimeProvider, Write};
+use fatfs::{File, FileSystem, OemCpConverter, ReadWriteSeek, TimeProvider, Write};
 use heapless::{consts::*, String, Vec};
 use miniz_oxide::inflate::{core, TINFLStatus};
 
@@ -15,7 +15,7 @@ pub struct ExtraHeader {
     pub data: Vec<u8, U256>,
 }
 
-/// describes a Local File Header from the zip specification
+/// represents a Local File Header from the zip specification
 #[derive(Debug, Clone)]
 pub struct LocalFileHeader {
     pub extract_version: u16,
@@ -28,6 +28,31 @@ pub struct LocalFileHeader {
     pub uncompressed_size: u32,
     pub file_name: String<U256>,
     pub extra_field: Option<Vec<ExtraHeader, U8>>,
+    pub data_descriptor: Option<DataDescriptor>,
+}
+
+/// represents a data descriptor
+#[derive(Debug, Clone)]
+pub struct DataDescriptor {
+    pub crc32: u32,
+    pub compressed_size: u32,
+    pub uncompressed_size: u32,
+}
+
+impl DataDescriptor {
+    pub fn read<IO: ReadWriteSeek, TP: TimeProvider, OCC: OemCpConverter>(
+        rdr: &mut BufReader<IO, TP, OCC>,
+    ) -> Result<DataDescriptor, EPubError<IO>> {
+        trace!("read data descriptor");
+        let crc32 = rdr.read4()?;
+        let compressed_size = rdr.read4()?;
+        let uncompressed_size = rdr.read4()?;
+        Ok(DataDescriptor {
+            crc32,
+            compressed_size,
+            uncompressed_size,
+        })
+    }
 }
 
 /// debug format for LocalFileHeader
@@ -50,6 +75,11 @@ impl LocalFileHeader {
     /// is the signature a LocalFileHeader
     pub fn is_lfh(sig_byte: u32) -> bool {
         sig_byte == LocalFileHeader::LOCALHEADERFILESIG
+    }
+
+    /// is there data descriptor for this header
+    pub fn have_data_descriptor(&self) -> bool {
+        self.general_purpose_flag & (1 << 4) == (1 << 4)
     }
 
     /// does this header describe a file
@@ -78,12 +108,16 @@ impl LocalFileHeader {
         let crc32 = rdr.read4()?;
         let compressed_size = rdr.read4()?;
         let uncompressed_size = rdr.read4()?;
-        let file_name_length = rdr.read2()?;
-        let extra_field_length = rdr.read2()?;
-        let file_name = extract_string_256(rdr, file_name_length as usize)?;
+        let file_name_length = rdr.read2()? as usize;
+        let extra_field_length = rdr.read2()? as usize;
+        if file_name_length > 256 {
+            return Err(EPubError::ReadTruncated);
+        }
+        let file_name =
+            String::from_utf8(rdr.read(file_name_length)?).map_err(|e| EPubError::UTF8(e))?;
         let extra_field = if extra_field_length > 0 {
             let mut fieldvec = Vec::new();
-            let mut data_left = extra_field_length as usize;
+            let mut data_left = extra_field_length;
             while data_left > 0 {
                 let id = rdr.read2()?;
                 let data_len = rdr.read2()? as usize;
@@ -99,6 +133,7 @@ impl LocalFileHeader {
         } else {
             None
         };
+        let data_descriptor = None;
 
         let lfh = LocalFileHeader {
             extract_version,
@@ -111,6 +146,7 @@ impl LocalFileHeader {
             uncompressed_size,
             file_name,
             extra_field,
+            data_descriptor,
         };
         info!("LocalFileHeader for {:?}", lfh.file_name);
         trace!("{:?}", lfh);
@@ -160,11 +196,9 @@ impl LocalFileHeader {
                 );
                 match status {
                     TINFLStatus::NeedsMoreInput | TINFLStatus::Done => {
-                        trace!("done with inflate input chunk");
                         do_it = false;
                     }
                     TINFLStatus::HasMoreOutput => {
-                        trace!("inflate has more output");
                         start += in_consumed;
                     }
                     e => return Err(EPubError::Decompress(e)),
@@ -192,19 +226,104 @@ impl LocalFileHeader {
     }
 }
 
-/// extract a maximum 256 byte string from a BufReader
-fn extract_string_256<IO: ReadWriteSeek, TP: TimeProvider, OCC: OemCpConverter>(
-    rdr: &mut BufReader<IO, TP, OCC>,
-    nbytes: usize,
-) -> Result<String<U256>, EPubError<IO>> {
-    if nbytes > 256 {
-        return Err(EPubError::ReadTruncated);
+#[derive(Debug, Clone)]
+pub struct FileEntry {
+    disk_name: String<U256>,
+    name: String<U256>,
+}
+
+#[derive(Debug, Clone)]
+pub struct Container {
+    file_entries: Vec<FileEntry, U128>,
+    expanded_dir_path: String<U256>,
+}
+
+impl Container {
+    pub fn new(dir_path: &str) -> Container {
+        Container {
+            file_entries: Vec::new(),
+            expanded_dir_path: String::from(dir_path),
+        }
     }
-    let v = rdr.read(nbytes)?;
-    if v.len() < nbytes {
-        return Err(EPubError::ReadTruncated);
+
+    pub fn expand<IO: ReadWriteSeek, TP: TimeProvider, OCC: OemCpConverter>(
+        &mut self,
+        epub_filepath: &str,
+        fs: &mut FileSystem<IO, TP, OCC>,
+    ) -> Result<(), EPubError<IO>> {
+        // open the epub file
+        let root_dir = fs.root_dir();
+        let epub_file = root_dir
+            .open_file(epub_filepath)
+            .map_err(|e| EPubError::IO(e))?;
+
+        self.file_entries
+            .push(FileEntry {
+                disk_name: String::from(epub_filepath),
+                name: String::from(epub_filepath),
+            })
+            .map_err(|_| EPubError::TooManyFileEntries)?;
+
+        // now expand the file
+        let mut rdr = BufReader::new(epub_file)?;
+        loop {
+            #[cfg(feature = "std")]
+            log::trace!("{:?}", rdr);
+            let signature = rdr.peek4()?;
+            log::trace!("Signature: {:x}", signature);
+            if LocalFileHeader::is_lfh(signature) {
+                let mut lfh = LocalFileHeader::read(&mut rdr)?;
+                if lfh.general_purpose_flag != 0 && !lfh.have_data_descriptor() {
+                    return Err(EPubError::Unimplemented);
+                }
+                if lfh.compression_method == 0 || lfh.compression_method == 8 {
+                    if lfh.is_file() {
+                        info!("Create file {}", lfh.file_name);
+                        let filename = self.expanded_file_path(&lfh.file_name)?;
+                        let mut this_file = root_dir
+                            .create_file(&filename.as_str())
+                            .map_err(|e| EPubError::IO(e))?;
+                        this_file.truncate().map_err(|e| EPubError::IO(e))?;
+                        // write the file, either compressed or not
+                        if lfh.compression_method == 8 {
+                            lfh.inflate(&mut rdr, &mut this_file)?;
+                        } else {
+                            let mut bytes_to_go = lfh.uncompressed_size as usize;
+                            while bytes_to_go > 0 {
+                                let n = if bytes_to_go > 256 { 256 } else { bytes_to_go };
+                                let v = rdr.read(n)?;
+                                this_file.write(&v).map_err(|e| EPubError::IO(e))?;
+                                bytes_to_go -= v.len();
+                            }
+                        }
+                    } else if lfh.is_dir() {
+                        info!("Create directory {}", lfh.file_name);
+                        let dirname = self.expanded_file_path(&lfh.file_name)?;
+                        root_dir
+                            .create_dir(&dirname.as_str())
+                            .map_err(|e| EPubError::IO(e))?;
+                    }
+                }
+                if lfh.have_data_descriptor() {
+                    let dd = DataDescriptor::read(&mut rdr)?;
+                    lfh.data_descriptor.replace(dd);
+                }
+            } else {
+                break;
+            }
+        }
+        Ok(())
     }
-    Ok(String::from_utf8(v).map_err(|e| EPubError::UTF8(e))?)
+    /// create a file path, with the given filename
+    fn expanded_file_path<IO: ReadWriteSeek>(
+        &self,
+        fname: &String<U256>,
+    ) -> Result<String<U256>, EPubError<IO>> {
+        let mut s = String::from(self.expanded_dir_path.as_str());
+        s.push_str("/").map_err(|_e| EPubError::PathTooLong)?;
+        s.push_str(fname).map_err(|_e| EPubError::PathTooLong)?;
+        Ok(s)
+    }
 }
 
 #[cfg(test)]

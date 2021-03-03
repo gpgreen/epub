@@ -2,9 +2,9 @@ use crate::EPubError;
 use byteorder::{ByteOrder, LittleEndian};
 use fatfs::{File, OemCpConverter, Read, ReadWriteSeek, TimeProvider};
 
-use log::{info, trace};
-#[cfg(feature = "std")]
-use std::fmt;
+//use log::{info, trace};
+//#[cfg(feature = "std")]
+//use std::fmt;
 
 #[derive(Clone)]
 pub struct Block {

@@ -1,13 +1,13 @@
 ## EPUB
 
 Rust library for working with epub e-book files. This is a `no_std`
-library. It does use `alloc`, the heap may be quite small. The
-compression library needs a heap to expand blocks.
+library. The epub format has compressed files. The compression
+algorithm uses 64k for the input and output decompression buffers. Those
+buffers are allocated on the stack.
 
 The library requires a fat filesystem to work, it is using `fatfs`.
 The epub file is expanded into a directory on the fat
-filesystem. The directory is hardcoded for now into the root directory
-of the fat filesystem, and is intended for only one epub file.
+filesystem.
 
 All paths are constricted to 256 bytes in length.
 

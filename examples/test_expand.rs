@@ -98,7 +98,7 @@ fn main() {
     let epubname: String<U256> = String::from("RUSTPR~1.EPU");
     let epubfile = EPubFile::new(epubname);
 
-    match epubfile.expand(&mut fs) {
+    match epubfile.expand(EPubFile::EXPAND_DIR, &mut fs) {
         Ok(()) => println!("Inflated successfully!"),
         Err(_e) => println!("Inflation unsuccessful!"),
     }
