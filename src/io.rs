@@ -56,7 +56,7 @@ where
         let mut blocks = Vec::new();
         blocks.push([0u8; BUFBLOCKSIZE]).unwrap();
         blocks.push([0u8; BUFBLOCKSIZE]).unwrap();
-        // start out with this idx, so 0 position is loaded below
+        // start out with this idx, so 0 position block is loaded below
         let block_idx = 1;
         let cursor = 0;
         let peek_rolled = false;
@@ -84,6 +84,7 @@ where
         } else {
             &mut self.blocks[0]
         };
+        // TODO: it may not read all bytes, so need to retry
         self.file.read(buf).map_err(|e| EPubError::IO(e))
     }
 
@@ -226,50 +227,52 @@ where
         }
     }
 
-    /// read 512 bytes from file into an array
-    pub fn read512_to_array(&mut self, arr: &mut [u8]) -> Result<(), EPubError<IO>> {
-        let n = arr.len();
-        if n > 512 {
-            return Err(EPubError::ReadTruncated);
-        };
-        if self.cursor + n < BUFBLOCKSIZE {
-            for i in 0..n {
-                arr[i] = self.blocks[self.block_idx][self.cursor + i];
+    /// read from file into an array
+    pub fn read_to_array(&mut self, arr: &mut [u8]) -> Result<(), EPubError<IO>> {
+        trace!("read {} bytes to array", arr.len());
+        let mut arr_idx = 0;
+        let end = arr.len();
+        while arr_idx < end {
+            let n = if arr_idx + BUFBLOCKSIZE < end {
+                BUFBLOCKSIZE
+            } else {
+                end - arr_idx
+            };
+            if self.cursor + n < BUFBLOCKSIZE {
+                for i in 0..n {
+                    arr[arr_idx + i] = self.blocks[self.block_idx][self.cursor + i];
+                }
+                trace!(
+                    "read_to_array {} bytes at {}:{}",
+                    n,
+                    self.block_idx,
+                    self.cursor
+                );
+                self.cursor += n;
+            } else {
+                trace!("read block rollover");
+                self.load_block()?;
+                let j = BUFBLOCKSIZE - self.cursor;
+                trace!(
+                    "read_to_array {} bytes at {}:{}",
+                    j,
+                    self.block_idx,
+                    self.cursor
+                );
+                for i in 0..j {
+                    arr[arr_idx + i] = self.blocks[self.block_idx][self.cursor + i];
+                }
+                self.block_idx ^= 1;
+                trace!("read_to_array {} bytes at {}:{}", n - j, self.block_idx, 0);
+                for i in 0..n - j {
+                    arr[arr_idx + i + j] = self.blocks[self.block_idx][i];
+                }
+                self.cursor = n - j;
             }
-            trace!(
-                "read512_to_array {} bytes at {}:{}",
-                n,
-                self.block_idx,
-                self.cursor
-            );
-            self.cursor += n;
-            Ok(())
-        } else {
-            trace!("read block rollover");
-            self.load_block()?;
-            let j = BUFBLOCKSIZE - self.cursor;
-            trace!(
-                "read512_to_array {} bytes at {}:{}",
-                j,
-                self.block_idx,
-                self.cursor
-            );
-            for i in 0..j {
-                arr[i] = self.blocks[self.block_idx][self.cursor + i];
-            }
-            self.block_idx ^= 1;
-            trace!(
-                "read512_to_array {} bytes at {}:{}",
-                n - j,
-                self.block_idx,
-                0
-            );
-            for i in 0..n - j {
-                arr[i + j] = self.blocks[self.block_idx][i];
-            }
-            self.cursor = n - j;
-            Ok(())
+            arr_idx += n;
+            trace!("read_to_array progress:{} bytes", arr_idx);
         }
+        Ok(())
     }
 
     /// get a copy of the current block

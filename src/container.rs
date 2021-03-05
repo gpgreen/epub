@@ -176,18 +176,13 @@ impl LocalFileHeader {
                 (bytes_to_go, 0)
             };
             trace!("inflate {} byte chunk", n);
-            let mut i = 0;
-            while i < n {
-                let end = if i + 512 < n { i + 512 } else { n };
-                rdr.read512_to_array(&mut input[i..end])?;
-                i += 512;
-            }
-            let mut do_it = true;
-            let mut start = 0;
-            while do_it {
+            rdr.read_to_array(&mut input[..n])?;
+            let mut keep_looping = true;
+            let mut in_start = 0;
+            while keep_looping {
                 // following should loop until all input consumed
                 let (status, in_consumed, out_consumed) =
-                    core::decompress(&mut decomp, &input[start..n], &mut output, 0, flags);
+                    core::decompress(&mut decomp, &input[in_start..n], &mut output, 0, flags);
                 trace!(
                     "inflate status {:?} incoming {} bytes outgoing {} bytes",
                     status,
@@ -196,21 +191,21 @@ impl LocalFileHeader {
                 );
                 match status {
                     TINFLStatus::NeedsMoreInput | TINFLStatus::Done => {
-                        do_it = false;
+                        keep_looping = false;
                     }
                     TINFLStatus::HasMoreOutput => {
-                        start += in_consumed;
+                        in_start += in_consumed;
                     }
                     e => return Err(EPubError::Decompress(e)),
                 }
 
-                let mut write_start = 0;
-                while write_start < out_consumed {
+                let mut out_start = 0;
+                while out_start < out_consumed {
                     let n = output_file
-                        .write(&output[write_start..out_consumed])
+                        .write(&output[out_start..out_consumed])
                         .map_err(|x| EPubError::<IO>::IO(x))?;
                     trace!("wrote {} bytes to file", n,);
-                    write_start += n;
+                    out_start += n;
                 }
                 output_file.flush().map_err(|e| EPubError::<IO>::IO(e))?;
                 count += out_consumed;
@@ -227,25 +222,22 @@ impl LocalFileHeader {
 }
 
 #[derive(Debug, Clone)]
-pub struct FileEntry {
-    disk_name: String<U256>,
-    name: String<U256>,
-}
-
-#[derive(Debug, Clone)]
 pub struct Container {
-    file_entries: Vec<FileEntry, U128>,
     expanded_dir_path: String<U256>,
 }
 
 impl Container {
+    const CENTRAL_DIR_FILE_HEADER: u32 = 0x02014b50;
+    const EPUB_FILE_POSTCARD: &'static str = "fentry.txt";
+
+    /// create new container rooted at given directory
     pub fn new(dir_path: &str) -> Container {
         Container {
-            file_entries: Vec::new(),
             expanded_dir_path: String::from(dir_path),
         }
     }
 
+    /// expand the epub file into the directory
     pub fn expand<IO: ReadWriteSeek, TP: TimeProvider, OCC: OemCpConverter>(
         &mut self,
         epub_filepath: &str,
@@ -257,12 +249,16 @@ impl Container {
             .open_file(epub_filepath)
             .map_err(|e| EPubError::IO(e))?;
 
-        self.file_entries
-            .push(FileEntry {
-                disk_name: String::from(epub_filepath),
-                name: String::from(epub_filepath),
-            })
-            .map_err(|_| EPubError::TooManyFileEntries)?;
+        // create the disk entry file
+        info!("creating epub file entry data file");
+        let de_filename = self.expanded_file_path(&Container::EPUB_FILE_POSTCARD)?;
+        let mut disk_entry_file = root_dir
+            .create_file(&de_filename.as_str())
+            .map_err(|e| EPubError::IO(e))?;
+        disk_entry_file
+            .write(epub_filepath.as_bytes())
+            .map_err(|e| EPubError::IO(e))?;
+        disk_entry_file.write(b"\n").map_err(|e| EPubError::IO(e))?;
 
         // now expand the file
         let mut rdr = BufReader::new(epub_file)?;
@@ -283,7 +279,6 @@ impl Container {
                         let mut this_file = root_dir
                             .create_file(&filename.as_str())
                             .map_err(|e| EPubError::IO(e))?;
-                        this_file.truncate().map_err(|e| EPubError::IO(e))?;
                         // write the file, either compressed or not
                         if lfh.compression_method == 8 {
                             lfh.inflate(&mut rdr, &mut this_file)?;
@@ -296,6 +291,11 @@ impl Container {
                                 bytes_to_go -= v.len();
                             }
                         }
+
+                        disk_entry_file
+                            .write(&lfh.file_name.as_bytes())
+                            .map_err(|e| EPubError::IO(e))?;
+                        disk_entry_file.write(b"\n").map_err(|e| EPubError::IO(e))?;
                     } else if lfh.is_dir() {
                         info!("Create directory {}", lfh.file_name);
                         let dirname = self.expanded_file_path(&lfh.file_name)?;
@@ -308,16 +308,22 @@ impl Container {
                     let dd = DataDescriptor::read(&mut rdr)?;
                     lfh.data_descriptor.replace(dd);
                 }
-            } else {
+            } else if signature == Container::CENTRAL_DIR_FILE_HEADER {
+                info!("End of local file headers in the epub file");
                 break;
+            } else {
+                return Err(EPubError::FormatError(
+                    "unknown signature after local file header",
+                ));
             }
         }
+
         Ok(())
     }
-    /// create a file path, with the given filename
+    /// create a file path under the epub directory, with the given filename
     fn expanded_file_path<IO: ReadWriteSeek>(
         &self,
-        fname: &String<U256>,
+        fname: &str,
     ) -> Result<String<U256>, EPubError<IO>> {
         let mut s = String::from(self.expanded_dir_path.as_str());
         s.push_str("/").map_err(|_e| EPubError::PathTooLong)?;
