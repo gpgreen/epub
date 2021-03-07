@@ -1,11 +1,10 @@
 use crate::EPubError;
 use byteorder::{ByteOrder, LittleEndian};
-use fatfs::{File, OemCpConverter, Read, ReadWriteSeek, TimeProvider};
+use core::fmt::Debug;
+use fatfs::{File, IoBase, IoError, OemCpConverter, Read, ReadWriteSeek, TimeProvider};
 use heapless::{consts::*, String, Vec};
 
 use log::{info, trace};
-#[cfg(feature = "std")]
-use std::fmt;
 
 /// Read data from blocks serially
 ///
@@ -13,14 +12,14 @@ use std::fmt;
 //#[derive(Debug)]
 pub struct BufReader<'a, IO, TP, OCC>
 where
-    IO: ReadWriteSeek,
+    IO: ReadWriteSeek + Debug + IoBase<Error = IO>,
     TP: TimeProvider,
     OCC: OemCpConverter,
 {
     /// the file we are reading from
     file: File<'a, IO, TP, OCC>,
     /// the block buffers
-    blocks: Vec<[u8; 512], U2>,
+    blocks: Vec<[u8; BUFBLOCKSIZE], U2>,
     /// which block buffer is the cursor in
     block_idx: usize,
     /// the cursor position in the block_idx buffer
@@ -30,8 +29,8 @@ where
 }
 
 #[cfg(feature = "std")]
-impl<'a, IO: ReadWriteSeek, TP: TimeProvider, OCC: OemCpConverter> std::fmt::Debug
-    for BufReader<'a, IO, TP, OCC>
+impl<'a, IO: ReadWriteSeek + Debug + IoBase<Error = IO>, TP: TimeProvider, OCC: OemCpConverter>
+    std::fmt::Debug for BufReader<'a, IO, TP, OCC>
 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
@@ -46,7 +45,7 @@ const BUFBLOCKSIZE: usize = 512;
 
 impl<'a, IO, TP, OCC> BufReader<'a, IO, TP, OCC>
 where
-    IO: ReadWriteSeek,
+    IO: ReadWriteSeek + Debug + IoBase<Error = IO>,
     TP: TimeProvider,
     OCC: OemCpConverter,
 {
@@ -200,7 +199,7 @@ where
     }
 
     /// read 256 bytes from file, return as Vec
-    pub fn read(&mut self, n: usize) -> Result<Vec<u8, U256>, EPubError<IO>> {
+    pub fn read_to_vec(&mut self, n: usize) -> Result<Vec<u8, U256>, EPubError<IO>> {
         if n > 256 {
             return Err(EPubError::ReadTruncated);
         };
@@ -228,7 +227,7 @@ where
     }
 
     /// read from file into an array
-    pub fn read_to_array(&mut self, arr: &mut [u8]) -> Result<(), EPubError<IO>> {
+    pub fn read_to_array(&mut self, arr: &mut [u8]) -> Result<usize, EPubError<IO>> {
         trace!("read {} bytes to array", arr.len());
         let mut arr_idx = 0;
         let end = arr.len();
@@ -272,12 +271,32 @@ where
             arr_idx += n;
             trace!("read_to_array progress:{} bytes", arr_idx);
         }
-        Ok(())
+        Ok(end)
     }
 
     /// get a copy of the current block
     pub fn get_block(&self) -> Vec<u8, U512> {
         Vec::<u8, U512>::from_slice(&self.blocks[self.block_idx]).unwrap()
+    }
+}
+
+impl<'a, IO, TP, OCC> IoBase for BufReader<'a, IO, TP, OCC>
+where
+    IO: ReadWriteSeek + Debug + IoBase<Error = IO>,
+    TP: TimeProvider,
+    OCC: OemCpConverter,
+{
+    type Error = EPubError<IO>;
+}
+
+impl<'a, IO, TP, OCC> Read for BufReader<'a, IO, TP, OCC>
+where
+    IO: ReadWriteSeek + Debug + IoBase<Error = IO>,
+    TP: TimeProvider,
+    OCC: OemCpConverter,
+{
+    fn read(&mut self, buf: &mut [u8]) -> Result<usize, Self::Error> {
+        self.read_to_array(buf)
     }
 }
 

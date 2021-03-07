@@ -22,8 +22,13 @@ default-features = false
 version = "1"
 default-features = false
 
+[dependencies.RustyXML]
+#version = "0.3"
+default-features = false
+
 [patch.crates-io]
 fatfs = { path = "../../rust-fatfs" }
+RustyXML = { path = "../RustyXML" }
 
 [dev-dependencies]
 fscommon = "0.1"

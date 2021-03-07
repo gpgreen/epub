@@ -1,12 +1,11 @@
 use crate::io::BufReader;
 use crate::EPubError;
-use fatfs::{File, FileSystem, OemCpConverter, ReadWriteSeek, TimeProvider, Write};
+use alloc::fmt::Debug;
+use fatfs::{File, FileSystem, IoBase, OemCpConverter, ReadWriteSeek, TimeProvider, Write};
 use heapless::{consts::*, String, Vec};
 use miniz_oxide::inflate::{core, TINFLStatus};
 
 use log::{info, trace};
-#[cfg(feature = "std")]
-use std::fmt;
 
 /// represents an extra section from the extra field portion of a LocalFileHeader
 #[derive(Debug, Clone)]
@@ -40,7 +39,11 @@ pub struct DataDescriptor {
 }
 
 impl DataDescriptor {
-    pub fn read<IO: ReadWriteSeek, TP: TimeProvider, OCC: OemCpConverter>(
+    pub fn read<
+        IO: ReadWriteSeek + Debug + IoBase<Error = IO>,
+        TP: TimeProvider,
+        OCC: OemCpConverter,
+    >(
         rdr: &mut BufReader<IO, TP, OCC>,
     ) -> Result<DataDescriptor, EPubError<IO>> {
         trace!("read data descriptor");
@@ -58,7 +61,7 @@ impl DataDescriptor {
 /// debug format for LocalFileHeader
 #[cfg(feature = "std")]
 impl std::fmt::Debug for LocalFileHeader {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("LocalFileHeader")?;
         if Some(self.extra_field) {
             for eh in Some(self.extra_field).iter() {
@@ -93,7 +96,11 @@ impl LocalFileHeader {
     }
 
     /// read a LocalFileHeader from BufReader
-    pub fn read<IO: ReadWriteSeek, TP: TimeProvider, OCC: OemCpConverter>(
+    pub fn read<
+        IO: ReadWriteSeek + Debug + IoBase<Error = IO>,
+        TP: TimeProvider,
+        OCC: OemCpConverter,
+    >(
         rdr: &mut BufReader<IO, TP, OCC>,
     ) -> Result<LocalFileHeader, EPubError<IO>> {
         let sig = rdr.read4()?;
@@ -113,8 +120,8 @@ impl LocalFileHeader {
         if file_name_length > 256 {
             return Err(EPubError::ReadTruncated);
         }
-        let file_name =
-            String::from_utf8(rdr.read(file_name_length)?).map_err(|e| EPubError::UTF8(e))?;
+        let file_name = String::from_utf8(rdr.read_to_vec(file_name_length)?)
+            .map_err(|e| EPubError::UTF8(e))?;
         let extra_field = if extra_field_length > 0 {
             let mut fieldvec = Vec::new();
             let mut data_left = extra_field_length;
@@ -124,7 +131,7 @@ impl LocalFileHeader {
                 if data_len > 256 {
                     return Err(EPubError::ReadTruncated);
                 }
-                let data = Vec::from_slice(&rdr.read(data_len)?).unwrap();
+                let data = Vec::from_slice(&rdr.read_to_vec(data_len)?).unwrap();
                 let ef = ExtraHeader { id, data };
                 fieldvec.push(ef).map_err(|_| EPubError::ReadTruncated)?;
                 data_left -= data_len + 4;
@@ -154,7 +161,11 @@ impl LocalFileHeader {
     }
 
     /// inflate compressed data from a BufReader into a file
-    pub fn inflate<IO: ReadWriteSeek, TP: TimeProvider, OCC: OemCpConverter>(
+    pub fn inflate<
+        IO: ReadWriteSeek + Debug + IoBase<Error = IO>,
+        TP: TimeProvider,
+        OCC: OemCpConverter,
+    >(
         &self,
         rdr: &mut BufReader<IO, TP, OCC>,
         output_file: &mut File<IO, TP, OCC>,
@@ -221,7 +232,11 @@ impl LocalFileHeader {
     }
 }
 
-#[derive(Debug, Clone)]
+/// represents an epub file container
+///
+/// this type is responsible for expanding the epub file on disk and to pass file handles
+/// to other parts of the library
+#[derive(Clone)]
 pub struct Container {
     expanded_dir_path: String<U256>,
 }
@@ -237,8 +252,28 @@ impl Container {
         }
     }
 
+    /// open a file from the epub
+    pub fn open_file<
+        'a,
+        IO: ReadWriteSeek + Debug + IoBase<Error = IO>,
+        TP: TimeProvider,
+        OCC: OemCpConverter,
+    >(
+        &self,
+        file_name: &str,
+        fs: &'a mut FileSystem<IO, TP, OCC>,
+    ) -> Result<File<'a, IO, TP, OCC>, EPubError<IO>> {
+        let file_path = self.expanded_file_path(file_name)?;
+        let root_dir = fs.root_dir();
+        root_dir.open_file(&file_path).map_err(|e| EPubError::IO(e))
+    }
+
     /// expand the epub file into the directory
-    pub fn expand<IO: ReadWriteSeek, TP: TimeProvider, OCC: OemCpConverter>(
+    pub fn expand<
+        IO: ReadWriteSeek + Debug + IoBase<Error = IO>,
+        TP: TimeProvider,
+        OCC: OemCpConverter,
+    >(
         &mut self,
         epub_filepath: &str,
         fs: &mut FileSystem<IO, TP, OCC>,
@@ -286,7 +321,7 @@ impl Container {
                             let mut bytes_to_go = lfh.uncompressed_size as usize;
                             while bytes_to_go > 0 {
                                 let n = if bytes_to_go > 256 { 256 } else { bytes_to_go };
-                                let v = rdr.read(n)?;
+                                let v = rdr.read_to_vec(n)?;
                                 this_file.write(&v).map_err(|e| EPubError::IO(e))?;
                                 bytes_to_go -= v.len();
                             }
@@ -321,7 +356,7 @@ impl Container {
         Ok(())
     }
     /// create a file path under the epub directory, with the given filename
-    fn expanded_file_path<IO: ReadWriteSeek>(
+    fn expanded_file_path<IO: ReadWriteSeek + Debug + IoBase<Error = IO>>(
         &self,
         fname: &str,
     ) -> Result<String<U256>, EPubError<IO>> {
