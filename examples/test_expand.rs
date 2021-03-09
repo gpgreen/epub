@@ -18,6 +18,7 @@
 
 const FILE_TO_PRINT: &'static str = "README.TXT";
 
+use epub::package::Package;
 use epub::EPubFile;
 use fscommon::{BufStream, StreamSlice};
 use heapless::{consts::*, String};
@@ -96,7 +97,7 @@ fn main() {
     //////////////////////////////////////////////////////////////
 
     let epubname: String<U256> = String::from("RUSTPR~1.EPU");
-    let epub_file = EPubFile::new(epubname);
+    let mut epub_file = EPubFile::new(epubname);
 
     match epub_file.expand(EPubFile::EXPAND_DIR, &mut fs) {
         Ok(()) => println!("Inflated successfully!"),
@@ -105,7 +106,8 @@ fn main() {
 
     //////////////////////////////////////////////////////////////
 
-    let epub_opf: String<U256> = String::from("OEBPS/9781718500457.opf");
-    let opf_file = epub_file.open_file(epub_opf.as_str(), &mut fs);
-    //epub_file.read(opf_file).unwrap();
+    match epub_file.read_container(&mut fs) {
+        Ok(()) => println!("Read container successfully!"),
+        Err(_e) => println!("Read unsuccessful!"),
+    }
 }

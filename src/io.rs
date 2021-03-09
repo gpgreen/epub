@@ -1,9 +1,7 @@
 use crate::EPubError;
 use byteorder::{ByteOrder, LittleEndian};
-use core::fmt::Debug;
-use fatfs::{File, IoBase, IoError, OemCpConverter, Read, ReadWriteSeek, TimeProvider};
+use fatfs::{File, OemCpConverter, Read, ReadWriteSeek, TimeProvider};
 use heapless::{consts::*, String, Vec};
-
 use log::{info, trace};
 
 /// Read data from blocks serially
@@ -12,14 +10,14 @@ use log::{info, trace};
 //#[derive(Debug)]
 pub struct BufReader<'a, IO, TP, OCC>
 where
-    IO: ReadWriteSeek + Debug + IoBase<Error = IO>,
+    IO: ReadWriteSeek,
     TP: TimeProvider,
     OCC: OemCpConverter,
 {
     /// the file we are reading from
     file: File<'a, IO, TP, OCC>,
     /// the block buffers
-    blocks: Vec<[u8; BUFBLOCKSIZE], U2>,
+    blocks: Vec<Vec<u8, U512>, U2>,
     /// which block buffer is the cursor in
     block_idx: usize,
     /// the cursor position in the block_idx buffer
@@ -29,8 +27,8 @@ where
 }
 
 #[cfg(feature = "std")]
-impl<'a, IO: ReadWriteSeek + Debug + IoBase<Error = IO>, TP: TimeProvider, OCC: OemCpConverter>
-    std::fmt::Debug for BufReader<'a, IO, TP, OCC>
+impl<'a, IO: ReadWriteSeek, TP: TimeProvider, OCC: OemCpConverter> std::fmt::Debug
+    for BufReader<'a, IO, TP, OCC>
 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
@@ -45,7 +43,7 @@ const BUFBLOCKSIZE: usize = 512;
 
 impl<'a, IO, TP, OCC> BufReader<'a, IO, TP, OCC>
 where
-    IO: ReadWriteSeek + Debug + IoBase<Error = IO>,
+    IO: ReadWriteSeek,
     TP: TimeProvider,
     OCC: OemCpConverter,
 {
@@ -53,8 +51,8 @@ where
     pub fn new(file: File<IO, TP, OCC>) -> Result<BufReader<IO, TP, OCC>, EPubError<IO>> {
         info!("Creating BufReader");
         let mut blocks = Vec::new();
-        blocks.push([0u8; BUFBLOCKSIZE]).unwrap();
-        blocks.push([0u8; BUFBLOCKSIZE]).unwrap();
+        blocks.push(Vec::new()).unwrap();
+        blocks.push(Vec::new()).unwrap();
         // start out with this idx, so 0 position block is loaded below
         let block_idx = 1;
         let cursor = 0;
@@ -78,166 +76,75 @@ where
             return Ok(0);
         }
         trace!("Loading Block into position {}", self.block_idx ^ 1);
+        // unwraps are safe because we only read BUFBLOCKSIZE
         let buf = if self.block_idx == 0 {
-            &mut self.blocks[1]
+            self.blocks[1].resize(BUFBLOCKSIZE, 0).unwrap();
+            &mut self.blocks[1][0..BUFBLOCKSIZE]
         } else {
-            &mut self.blocks[0]
+            self.blocks[0].resize(BUFBLOCKSIZE, 0).unwrap();
+            &mut self.blocks[0][0..BUFBLOCKSIZE]
         };
         // TODO: it may not read all bytes, so need to retry
-        self.file.read(buf).map_err(|e| EPubError::IO(e))
+        let n = self.file.read(buf).map_err(|e| EPubError::IO(e))?;
+        if n != BUFBLOCKSIZE {
+            trace!("load_block: short load of {} bytes", n);
+            // unwraps are safe as n is always less than BUFBLOCKSIZE
+            if self.block_idx == 0 {
+                self.blocks[1].resize(n, 0).unwrap();
+            } else {
+                self.blocks[0].resize(n, 0).unwrap();
+            }
+        }
+        Ok(n)
     }
 
     /// read 1 byte from file
     pub fn read1(&mut self) -> Result<u8, EPubError<IO>> {
-        if self.cursor < BUFBLOCKSIZE {
-            self.cursor += 1;
-            trace!("read1 byte at {}:{}", self.block_idx, self.cursor - 1);
-            Ok(self.blocks[self.block_idx][self.cursor - 1])
-        } else {
-            trace!("read1 block rollover");
-            self.load_block()?;
-            self.block_idx ^= 1;
-            self.cursor = 1;
-            trace!("read1 byte at {}:{}", self.block_idx, self.cursor - 1);
-            Ok(self.blocks[self.block_idx][0])
-        }
+        let mut arr = [0u8; 1];
+        self.read_to_array(&mut arr)?;
+        Ok(arr[0])
     }
 
     /// read 2 bytes from file
     pub fn read2(&mut self) -> Result<u16, EPubError<IO>> {
-        if self.cursor + 2 <= BUFBLOCKSIZE {
-            trace!("read2 bytes at {}:{}", self.block_idx, self.cursor);
-            self.cursor += 2;
-            Ok(LittleEndian::read_u16(
-                &self.blocks[self.block_idx][self.cursor - 2..self.cursor],
-            ))
-        } else {
-            trace!("read2 block rollover");
-            self.load_block()?;
-            let tmpbuf = if self.cursor == BUFBLOCKSIZE {
-                let idx = self.block_idx ^ 1;
-                trace!("read2 bytes at {}:{}", idx, 0);
-                self.cursor = 2;
-                [self.blocks[idx][0], self.blocks[idx][1]]
-            } else {
-                self.cursor = 1;
-                trace!(
-                    "read2 byte at {}:{} byte at {}:{}",
-                    self.block_idx,
-                    BUFBLOCKSIZE - 1,
-                    self.block_idx ^ 1,
-                    0
-                );
-                [
-                    self.blocks[self.block_idx][BUFBLOCKSIZE - 1],
-                    self.blocks[self.block_idx ^ 1][0],
-                ]
-            };
-            self.block_idx ^= 1;
-            Ok(LittleEndian::read_u16(&tmpbuf))
-        }
+        let mut arr = [0u8; 2];
+        self.read_to_array(&mut arr)?;
+        Ok(LittleEndian::read_u16(&arr))
     }
 
     /// read 4 bytes from file
     pub fn read4(&mut self) -> Result<u32, EPubError<IO>> {
-        if self.cursor + 4 <= BUFBLOCKSIZE {
-            self.cursor += 4;
-            trace!("read4 bytes at {}:{}", self.block_idx, self.cursor - 4);
-            Ok(LittleEndian::read_u32(
-                &self.blocks[self.block_idx][self.cursor - 4..self.cursor],
-            ))
-        } else {
-            trace!("read4 block rollover");
-            self.roll_over_4(false)
-        }
+        let mut arr = [0u8; 4];
+        self.read_to_array(&mut arr)?;
+        Ok(LittleEndian::read_u32(&arr))
     }
 
     /// peek at next 4 bytes from file
     pub fn peek4(&mut self) -> Result<u32, EPubError<IO>> {
-        if self.cursor + 4 <= BUFBLOCKSIZE {
-            trace!("peek4 bytes at {}:{}", self.block_idx, self.cursor);
-            Ok(LittleEndian::read_u32(
-                &self.blocks[self.block_idx][self.cursor..self.cursor + 4],
-            ))
-        } else {
-            trace!("peek4 block rollover");
-            self.roll_over_4(true)
-        }
-    }
-
-    /// crossing the block boundary with a 4 byte read
-    fn roll_over_4(&mut self, peek: bool) -> Result<u32, EPubError<IO>> {
-        self.load_block()?;
-        let j = BUFBLOCKSIZE - self.cursor;
-        let mut tmpbuf: [u8; 4] = [0u8; 4];
-        trace!(
-            "roll_over_4 {} bytes starting at {}:{}",
-            j,
-            self.block_idx,
-            self.cursor
-        );
-        for i in 0..j {
-            tmpbuf[i] = self.blocks[self.block_idx][self.cursor + i];
-        }
-        self.block_idx ^= 1;
-        trace!(
-            "roll_over_4 {} bytes starting at {}:{}",
-            4 - j,
-            self.block_idx,
-            0
-        );
-        for i in 0..4 - j {
-            tmpbuf[i + j] = self.blocks[self.block_idx][i];
-        }
-        if !peek {
-            self.cursor = 4 - j;
-        } else {
+        let cur = self.cursor;
+        let idx = self.block_idx;
+        let peekee = self.read4()?;
+        // restore previous state
+        self.cursor = cur;
+        if idx != self.block_idx {
+            self.block_idx = idx;
             self.peek_rolled = true;
-            self.block_idx ^= 1;
         }
-        Ok(LittleEndian::read_u32(&tmpbuf))
-    }
-
-    /// read 256 bytes from file, return as Vec
-    pub fn read_to_vec(&mut self, n: usize) -> Result<Vec<u8, U256>, EPubError<IO>> {
-        if n > 256 {
-            return Err(EPubError::ReadTruncated);
-        };
-        if self.cursor + n < BUFBLOCKSIZE {
-            let v = Vec::from_slice(&self.blocks[self.block_idx][self.cursor..self.cursor + n])
-                .unwrap();
-            trace!("read {} bytes at {}:{}", n, self.block_idx, self.cursor);
-            self.cursor += n;
-            Ok(v)
-        } else {
-            let mut v = Vec::new();
-            trace!("read block rollover");
-            self.load_block()?;
-            let j = BUFBLOCKSIZE - self.cursor;
-            trace!("read {} bytes at {}:{}", j, self.block_idx, self.cursor);
-            v.extend_from_slice(&self.blocks[self.block_idx][self.cursor..])
-                .unwrap();
-            self.block_idx ^= 1;
-            trace!("read {} bytes at {}:{}", n - j, self.block_idx, 0);
-            v.extend_from_slice(&self.blocks[self.block_idx][..n - j])
-                .unwrap();
-            self.cursor = n - j;
-            Ok(v)
-        }
+        Ok(peekee)
     }
 
     /// read from file into an array
     pub fn read_to_array(&mut self, arr: &mut [u8]) -> Result<usize, EPubError<IO>> {
         trace!("read {} bytes to array", arr.len());
         let mut arr_idx = 0;
-        let end = arr.len();
-        while arr_idx < end {
-            let n = if arr_idx + BUFBLOCKSIZE < end {
-                BUFBLOCKSIZE
+        let nbytes = arr.len();
+        while arr_idx < nbytes {
+            let n = if arr_idx + self.blocks[self.block_idx].len() < nbytes {
+                self.blocks[self.block_idx].len()
             } else {
-                end - arr_idx
+                nbytes - arr_idx
             };
-            if self.cursor + n < BUFBLOCKSIZE {
+            if self.cursor + n < self.blocks[self.block_idx].len() {
                 for i in 0..n {
                     arr[arr_idx + i] = self.blocks[self.block_idx][self.cursor + i];
                 }
@@ -251,7 +158,7 @@ where
             } else {
                 trace!("read block rollover");
                 self.load_block()?;
-                let j = BUFBLOCKSIZE - self.cursor;
+                let j = self.blocks[self.block_idx].len() - self.cursor;
                 trace!(
                     "read_to_array {} bytes at {}:{}",
                     j,
@@ -271,32 +178,38 @@ where
             arr_idx += n;
             trace!("read_to_array progress:{} bytes", arr_idx);
         }
-        Ok(end)
+        Ok(nbytes)
     }
 
-    /// get a copy of the current block
-    pub fn get_block(&self) -> Vec<u8, U512> {
-        Vec::<u8, U512>::from_slice(&self.blocks[self.block_idx]).unwrap()
-    }
-}
-
-impl<'a, IO, TP, OCC> IoBase for BufReader<'a, IO, TP, OCC>
-where
-    IO: ReadWriteSeek + Debug + IoBase<Error = IO>,
-    TP: TimeProvider,
-    OCC: OemCpConverter,
-{
-    type Error = EPubError<IO>;
-}
-
-impl<'a, IO, TP, OCC> Read for BufReader<'a, IO, TP, OCC>
-where
-    IO: ReadWriteSeek + Debug + IoBase<Error = IO>,
-    TP: TimeProvider,
-    OCC: OemCpConverter,
-{
-    fn read(&mut self, buf: &mut [u8]) -> Result<usize, Self::Error> {
-        self.read_to_array(buf)
+    /// read lines from file
+    pub fn read_lines(&mut self) -> Result<alloc::vec::Vec<alloc::vec::Vec<u8>>, EPubError<IO>> {
+        // TODO: make sure that file hasn't yet been read
+        let mut lines = alloc::vec::Vec::new();
+        let mut ln = alloc::vec::Vec::new();
+        loop {
+            let n = self.blocks[self.block_idx].len();
+            if n == 0 {
+                break;
+            }
+            let mut start = 0;
+            for i in 0..n {
+                if self.blocks[self.block_idx][i] == b'\n' {
+                    ln.extend_from_slice(&self.blocks[self.block_idx][start..i + 1]);
+                    let mut newln = alloc::vec::Vec::new();
+                    newln.extend(ln.iter().copied());
+                    lines.push(newln);
+                    ln.clear();
+                    start = i + 1;
+                }
+            }
+            ln.extend_from_slice(&self.blocks[self.block_idx][start..n]);
+            self.load_block()?;
+            self.block_idx ^= 1;
+        }
+        if ln.len() > 0 {
+            lines.push(ln);
+        }
+        Ok(lines)
     }
 }
 

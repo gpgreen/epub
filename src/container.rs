@@ -1,11 +1,9 @@
 use crate::io::BufReader;
 use crate::EPubError;
-use alloc::fmt::Debug;
-use fatfs::{File, FileSystem, IoBase, OemCpConverter, ReadWriteSeek, TimeProvider, Write};
+use fatfs::{File, FileSystem, OemCpConverter, ReadWriteSeek, TimeProvider, Write};
 use heapless::{consts::*, String, Vec};
-use miniz_oxide::inflate::{core, TINFLStatus};
-
 use log::{info, trace};
+use miniz_oxide::inflate::{core, TINFLStatus};
 
 /// represents an extra section from the extra field portion of a LocalFileHeader
 #[derive(Debug, Clone)]
@@ -39,11 +37,7 @@ pub struct DataDescriptor {
 }
 
 impl DataDescriptor {
-    pub fn read<
-        IO: ReadWriteSeek + Debug + IoBase<Error = IO>,
-        TP: TimeProvider,
-        OCC: OemCpConverter,
-    >(
+    pub fn read<IO: ReadWriteSeek, TP: TimeProvider, OCC: OemCpConverter>(
         rdr: &mut BufReader<IO, TP, OCC>,
     ) -> Result<DataDescriptor, EPubError<IO>> {
         trace!("read data descriptor");
@@ -96,11 +90,7 @@ impl LocalFileHeader {
     }
 
     /// read a LocalFileHeader from BufReader
-    pub fn read<
-        IO: ReadWriteSeek + Debug + IoBase<Error = IO>,
-        TP: TimeProvider,
-        OCC: OemCpConverter,
-    >(
+    pub fn read<IO: ReadWriteSeek, TP: TimeProvider, OCC: OemCpConverter>(
         rdr: &mut BufReader<IO, TP, OCC>,
     ) -> Result<LocalFileHeader, EPubError<IO>> {
         let sig = rdr.read4()?;
@@ -120,8 +110,11 @@ impl LocalFileHeader {
         if file_name_length > 256 {
             return Err(EPubError::ReadTruncated);
         }
-        let file_name = String::from_utf8(rdr.read_to_vec(file_name_length)?)
-            .map_err(|e| EPubError::UTF8(e))?;
+        let mut v = Vec::new();
+        // unwrap is safe as length is checked before
+        v.resize(file_name_length, 0).unwrap();
+        rdr.read_to_array(&mut v)?;
+        let file_name = String::from_utf8(v).map_err(|e| EPubError::UTF8(e))?;
         let extra_field = if extra_field_length > 0 {
             let mut fieldvec = Vec::new();
             let mut data_left = extra_field_length;
@@ -131,7 +124,10 @@ impl LocalFileHeader {
                 if data_len > 256 {
                     return Err(EPubError::ReadTruncated);
                 }
-                let data = Vec::from_slice(&rdr.read_to_vec(data_len)?).unwrap();
+                let mut data = Vec::new();
+                // unwrap is safe as length is checked before
+                data.resize(data_len, 0).unwrap();
+                rdr.read_to_array(&mut data)?;
                 let ef = ExtraHeader { id, data };
                 fieldvec.push(ef).map_err(|_| EPubError::ReadTruncated)?;
                 data_left -= data_len + 4;
@@ -161,11 +157,7 @@ impl LocalFileHeader {
     }
 
     /// inflate compressed data from a BufReader into a file
-    pub fn inflate<
-        IO: ReadWriteSeek + Debug + IoBase<Error = IO>,
-        TP: TimeProvider,
-        OCC: OemCpConverter,
-    >(
+    pub fn inflate<IO: ReadWriteSeek, TP: TimeProvider, OCC: OemCpConverter>(
         &self,
         rdr: &mut BufReader<IO, TP, OCC>,
         output_file: &mut File<IO, TP, OCC>,
@@ -175,7 +167,7 @@ impl LocalFileHeader {
         let mut decomp = core::DecompressorOxide::new();
         decomp.init();
         info!(
-            "inflate {} bytes to {} bytes",
+            "begin inflate {} bytes to {} bytes",
             self.compressed_size, self.uncompressed_size
         );
         let mut count = 0;
@@ -195,7 +187,7 @@ impl LocalFileHeader {
                 let (status, in_consumed, out_consumed) =
                     core::decompress(&mut decomp, &input[in_start..n], &mut output, 0, flags);
                 trace!(
-                    "inflate status {:?} incoming {} bytes outgoing {} bytes",
+                    "inflate [status {:?} incoming {} bytes outgoing {} bytes]",
                     status,
                     in_consumed,
                     out_consumed
@@ -224,7 +216,7 @@ impl LocalFileHeader {
             bytes_to_go -= n;
         }
         trace!(
-            "total inflated {} bytes, expected {}",
+            "finished inflate {} bytes, expected {}",
             count,
             self.uncompressed_size
         );
@@ -252,13 +244,37 @@ impl Container {
         }
     }
 
+    /// get the container file
+    pub fn get_container_filename<IO: ReadWriteSeek, TP: TimeProvider, OCC: OemCpConverter>(
+        &self,
+        fs: &mut FileSystem<IO, TP, OCC>,
+    ) -> Result<Option<alloc::string::String>, EPubError<IO>> {
+        let entry_file_name = self.expanded_file_path(Container::EPUB_FILE_POSTCARD)?;
+        let root_dir = fs.root_dir();
+        let entry_file = root_dir
+            .open_file(&entry_file_name)
+            .map_err(|e| EPubError::IO(e))?;
+        let mut rdr = BufReader::new(entry_file)?;
+        let lines = rdr.read_lines()?;
+        let mut containerv = alloc::vec::Vec::new();
+        for ln in &lines {
+            let i = ln.len() - 2; // strip off \n
+            if ln[i] == b'f' && ln[i - 1] == b'p' && ln[i - 2] == b'o' && ln[i - 3] == b'.' {
+                containerv.extend(ln.iter().copied());
+                break;
+            }
+        }
+        if containerv.len() > 0 {
+            Ok(Some(
+                alloc::string::String::from_utf8(containerv).map_err(|e| EPubError::FromUTF8(e))?,
+            ))
+        } else {
+            Ok(None)
+        }
+    }
+
     /// open a file from the epub
-    pub fn open_file<
-        'a,
-        IO: ReadWriteSeek + Debug + IoBase<Error = IO>,
-        TP: TimeProvider,
-        OCC: OemCpConverter,
-    >(
+    pub fn open_file<'a, IO: ReadWriteSeek, TP: TimeProvider, OCC: OemCpConverter>(
         &self,
         file_name: &str,
         fs: &'a mut FileSystem<IO, TP, OCC>,
@@ -269,11 +285,7 @@ impl Container {
     }
 
     /// expand the epub file into the directory
-    pub fn expand<
-        IO: ReadWriteSeek + Debug + IoBase<Error = IO>,
-        TP: TimeProvider,
-        OCC: OemCpConverter,
-    >(
+    pub fn expand<IO: ReadWriteSeek, TP: TimeProvider, OCC: OemCpConverter>(
         &mut self,
         epub_filepath: &str,
         fs: &mut FileSystem<IO, TP, OCC>,
@@ -320,10 +332,11 @@ impl Container {
                         } else {
                             let mut bytes_to_go = lfh.uncompressed_size as usize;
                             while bytes_to_go > 0 {
-                                let n = if bytes_to_go > 256 { 256 } else { bytes_to_go };
-                                let v = rdr.read_to_vec(n)?;
-                                this_file.write(&v).map_err(|e| EPubError::IO(e))?;
-                                bytes_to_go -= v.len();
+                                let mut n = if bytes_to_go > 256 { 256 } else { bytes_to_go };
+                                let mut arr = [0u8; 256];
+                                n = rdr.read_to_array(&mut arr[0..n])?;
+                                this_file.write(&arr[0..n]).map_err(|e| EPubError::IO(e))?;
+                                bytes_to_go -= n;
                             }
                         }
 
@@ -356,7 +369,7 @@ impl Container {
         Ok(())
     }
     /// create a file path under the epub directory, with the given filename
-    fn expanded_file_path<IO: ReadWriteSeek + Debug + IoBase<Error = IO>>(
+    fn expanded_file_path<IO: ReadWriteSeek>(
         &self,
         fname: &str,
     ) -> Result<String<U256>, EPubError<IO>> {
