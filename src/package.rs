@@ -180,15 +180,21 @@ use xml::{Event, Parser, StartTag};
 /// Package from EPub file
 #[derive(Debug)]
 pub struct Package {
-    unique_identifer: String,
-    version: String,
-    xml_lang: Option<String>,
+    /// attribute `unique-identifier`
+    pub unique_identifer: String,
+    /// attribute `version`
+    pub version: String,
+    /// attribute `xml:lang`
+    pub xml_lang: Option<String>,
     prefix: Option<String>,
     id: Option<String>,
     dir: Option<String>,
-    metadata: Metadata,
-    manifest: Manifest,
-    spine: Spine,
+    /// `metadata` section
+    pub metadata: Metadata,
+    /// `manifest` section
+    pub manifest: Manifest,
+    /// `spine` section
+    pub spine: Spine,
 }
 
 impl Package {
@@ -211,10 +217,13 @@ impl Package {
         let mut metadata = Metadata::new();
         let mut manifest = Manifest::new();
         let mut spine = Spine::new();
-        let mut in_package = false;
         let mut in_metadata = false;
         let mut in_manifest = false;
         let mut in_spine = false;
+        // the attributes on package
+        let mut package_uid: Option<String> = None;
+        let mut version: Option<String> = None;
+        let mut xml_lang: Option<String> = None;
         for ln in lines {
             p.feed_str(&ln);
             for event in &mut p {
@@ -225,12 +234,11 @@ impl Package {
                             info!("Start({})", tag.name);
                             if tag.name == "metadata" {
                                 in_metadata = true;
-                            } else if tag.name == "package" {
-                                in_package = true;
                             } else if tag.name == "manifest" {
                                 in_manifest = true;
                             } else if tag.name == "spine" {
                                 in_spine = true;
+                                spine.add_tag(&tag);
                             }
                             stack.push(Event::ElementStart(tag));
                         }
@@ -242,7 +250,11 @@ impl Package {
                                         if tag.name == "metadata" {
                                             in_metadata = false;
                                         } else if tag.name == "package" {
-                                            in_package = false;
+                                            let (a1, a2, a3) =
+                                                Package::collect_attributes(&start_tag);
+                                            package_uid = Some(a1);
+                                            version = Some(a2);
+                                            xml_lang = a3;
                                         } else if tag.name == "manifest" {
                                             in_manifest = false;
                                         } else if tag.name == "spine" {
@@ -283,17 +295,48 @@ impl Package {
                 }
             }
         }
-        Ok(Package {
-            unique_identifer: String::new(),
-            version: String::new(),
-            xml_lang: None,
-            prefix: None,
-            id: None,
-            dir: None,
-            metadata: metadata,
-            manifest: manifest,
-            spine: spine,
-        })
+        if let Some(uid) = package_uid {
+            if let Some(ver) = version {
+                Ok(Package {
+                    unique_identifer: uid,
+                    version: ver,
+                    xml_lang: xml_lang,
+                    prefix: None,
+                    id: None,
+                    dir: None,
+                    metadata: metadata,
+                    manifest: manifest,
+                    spine: spine,
+                })
+            } else {
+                panic!();
+            }
+        } else {
+            panic!();
+        }
+    }
+
+    fn collect_attributes(start_tag: &StartTag) -> (String, String, Option<String>) {
+        let mut uidstr = String::new();
+        let mut verstr = String::new();
+        let mut langstr: Option<String> = None;
+        if let Some(uid) = start_tag
+            .attributes
+            .get(&(String::from("unique-identifier"), None))
+        {
+            uidstr += uid;
+        }
+        if let Some(ver) = start_tag.attributes.get(&(String::from("version"), None)) {
+            verstr += ver;
+        }
+        // optional
+        if let Some(lang) = start_tag.attributes.get(&(
+            String::from("lang"),
+            Some(String::from("http://www.w3.org/XML/1998/namespace")),
+        )) {
+            langstr = Some(String::from(lang));
+        }
+        (uidstr, verstr, langstr)
     }
 }
 
@@ -334,25 +377,36 @@ impl Meta {
 #[derive(Debug)]
 pub struct Metadata {
     /// package:unique-identifer
-    identifier: String,
+    identifier: Identifier,
     /// dc:title element
     title: String,
     /// dc::language
     language: Vec<String>,
+    /// dc::contributor
     contributor: Option<String>,
+    /// dc::coverage
     coverage: Option<String>,
     /// dc:creator
     creator: Vec<String>,
     /// dc:date
     date: Option<String>,
+    /// dc::description
     description: Option<String>,
+    /// dc::format
     format: Option<String>,
+    /// dc::publisher
     publisher: Option<String>,
+    /// dc::relation
     relation: Option<String>,
+    /// dc::rights
     rights: Option<String>,
+    /// dc::source
     source: Option<String>,
+    /// dc::subject
     subject: Option<String>,
+    /// dc::type
     metadata_type: Option<String>,
+    /// list of `meta` tags
     meta_tags: Vec<Meta>,
 }
 
@@ -360,7 +414,7 @@ impl Metadata {
     /// create a new Metadata instance
     pub fn new() -> Metadata {
         Metadata {
-            identifier: String::new(),
+            identifier: Identifier::new(),
             title: String::new(),
             language: Vec::new(),
             contributor: None,
@@ -383,11 +437,10 @@ impl Metadata {
     pub fn add_tag(&mut self, tag: &StartTag, chars: &str) {
         trace!("metadata: '{}' with chars '{}'", tag.name, chars);
         for ((key1, key2), val) in &tag.attributes {
-            trace!("attribute '{}':'{:?}' is '{}'", key1, key2, val);
+            trace!("attribute '{}:{:?}' is '{}'", key1, key2, val);
         }
         if tag.name == "identifier" {
-            // TODO, get attribute id
-            self.identifier += chars;
+            self.identifier.add_tag(tag, chars);
         } else if tag.name == "title" {
             // has optional attributes dir,id,xml:lang
             self.title += chars;
@@ -424,6 +477,31 @@ impl Metadata {
     }
 }
 
+/// dc::identifier
+#[derive(Debug)]
+pub struct Identifier {
+    id: String,
+    text: String,
+}
+
+impl Identifier {
+    pub fn new() -> Identifier {
+        Identifier {
+            id: String::new(),
+            text: String::new(),
+        }
+    }
+
+    pub fn add_tag(&mut self, tag: &StartTag, chars: &str) {
+        if let Some(id) = tag.attributes.get(&(String::from("id"), None)) {
+            self.id += id;
+            self.text += chars;
+        } else {
+            panic!();
+        }
+    }
+}
+
 /// Manifest section of opf file
 #[derive(Debug)]
 pub struct Manifest {
@@ -445,9 +523,9 @@ impl Manifest {
 /// item tag of opf file
 #[derive(Debug)]
 pub struct Item {
-    id: String,
-    href: String,
-    media_type: String,
+    pub id: String,
+    pub href: String,
+    pub media_type: String,
 }
 
 impl Item {
@@ -477,7 +555,8 @@ impl Item {
 /// spine section from opf file
 #[derive(Debug)]
 pub struct Spine {
-    itemrefs: Vec<ItemRef>,
+    pub itemrefs: Vec<ItemRef>,
+    pub toc: String,
 }
 
 impl Spine {
@@ -485,19 +564,28 @@ impl Spine {
     pub fn new() -> Spine {
         Spine {
             itemrefs: Vec::new(),
+            toc: String::new(),
         }
     }
 
     /// add an itemref tag instance to the spine
     pub fn add_tag(&mut self, tag: &StartTag) {
-        self.itemrefs.push(ItemRef::new(tag))
+        if tag.name == "spine" {
+            if let Some(toc) = tag.attributes.get(&(String::from("toc"), None)) {
+                self.toc += toc;
+            } else {
+                panic!();
+            }
+        } else {
+            self.itemrefs.push(ItemRef::new(tag))
+        }
     }
 }
 
 /// itemref tag of opf file
 #[derive(Debug)]
 pub struct ItemRef {
-    idref: String,
+    pub idref: String,
 }
 
 impl ItemRef {
@@ -514,21 +602,145 @@ impl ItemRef {
     }
 }
 
+#[cfg(test)]
 mod tests {
     use super::*;
 
+    fn init() {
+        let _ = env_logger::builder().is_test(true).try_init();
+    }
+
     #[test]
-    fn test_event() {
+    fn test_package_attributes() {
+        init();
         let mut p = xml::Parser::new();
         // feed data to be parsed
-        p.feed_str("<a href");
-        p.feed_str("='//example.com'/>");
+        p.feed_str(
+            "<package xmlns=\"http://www.idpf.org/2007/opf\" version=\"3.0\" xml:lang=\"en\" unique-identifier=\"p9781718500457\">"
+        );
+        // get events for the fed data
+        for event in p {
+            match event.unwrap() {
+                xml::Event::ElementStart(tag) => {
+                    for ((key1, key2), val) in &tag.attributes {
+                        info!("attribute '{}:{:?}' is '{}'", key1, key2, val);
+                    }
+                    let (s1, s2, s3) = Package::collect_attributes(&tag);
+                    assert_eq!(s1, "p9781718500457");
+                    assert_eq!(s2, "3.0");
+                    assert_eq!(s3.unwrap(), "en");
+                }
+                _ => (),
+            }
+        }
+    }
+
+    #[test]
+    fn test_manifestitem() {
+        let mut p = xml::Parser::new();
+        // feed data to be parsed
+        p.feed_str(
+            "<item id=\"ncxtoc\" media-type=\"application/x-dtbncx+xml\" href=\"toc.ncx\"/>",
+        );
+        let mut manifest = Manifest::new();
+        // get events for the fed data
+        for event in p {
+            match event.unwrap() {
+                xml::Event::ElementStart(tag) => manifest.add_tag(&tag),
+                _ => (),
+            }
+        }
+        assert_eq!(manifest.items.len(), 1);
+    }
+
+    #[test]
+    fn test_item() {
+        let mut p = xml::Parser::new();
+        // feed data to be parsed
+        p.feed_str(
+            "<item id=\"ncxtoc\" media-type=\"application/x-dtbncx+xml\" href=\"toc.ncx\"/>",
+        );
 
         // get events for the fed data
         for event in p {
             match event.unwrap() {
-                xml::Event::ElementStart(tag) => assert_eq!("a", tag.name),
-                xml::Event::ElementEnd(tag) => assert_eq!("a", tag.name),
+                xml::Event::ElementStart(tag) => {
+                    let itm = Item::new(&tag);
+                    assert_eq!(itm.id, "ncxtoc");
+                    assert_eq!(itm.media_type, "application/x-dtbncx+xml");
+                    assert_eq!(itm.href, "toc.ncx");
+                }
+                _ => (),
+            }
+        }
+    }
+
+    #[test]
+    #[should_panic]
+    fn test_baditem() {
+        let mut p = xml::Parser::new();
+
+        p.feed_str(
+            "<item id=\"ncxtoc\" media-types=\"application/x-dtbncx+xml\" href=\"toc.ncx\"/>",
+        );
+        // get events for the fed data
+        for event in p {
+            match event.unwrap() {
+                xml::Event::ElementStart(tag) => {
+                    let itm = Item::new(&tag);
+                }
+                _ => (),
+            }
+        }
+    }
+
+    #[test]
+    fn test_spineitemref() {
+        let mut p = xml::Parser::new();
+        // feed data to be parsed
+        p.feed_str("<itemref idref=\"copy\"/>");
+        let mut spine = Spine::new();
+        // get events for the fed data
+        for event in p {
+            match event.unwrap() {
+                xml::Event::ElementStart(tag) => spine.add_tag(&tag),
+                _ => (),
+            }
+        }
+        assert_eq!(spine.itemrefs.len(), 1);
+    }
+
+    #[test]
+    fn test_itemref() {
+        let mut p = xml::Parser::new();
+        // feed data to be parsed
+        p.feed_str("<itemref idref=\"copy\"/>");
+
+        // get events for the fed data
+        for event in p {
+            match event.unwrap() {
+                xml::Event::ElementStart(tag) => {
+                    let itmref = ItemRef::new(&tag);
+                    assert_eq!(itmref.idref, "copy");
+                }
+                _ => (),
+            }
+        }
+    }
+
+    #[test]
+    #[should_panic]
+    fn test_baditemref() {
+        let mut p = xml::Parser::new();
+        // feed data to be parsed
+        p.feed_str("<itemref idrefs=\"copy\"/>");
+
+        // get events for the fed data
+        for event in p {
+            match event.unwrap() {
+                xml::Event::ElementStart(tag) => {
+                    let itmref = ItemRef::new(&tag);
+                }
                 _ => (),
             }
         }
