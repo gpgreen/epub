@@ -100,7 +100,7 @@ pub fn get_partition<IO: ReadWriteSeek, TP: TimeProvider, OCC: OemCpConverter>(
     const PARTITION_INFO_NUM_BLOCKS_INDEX: usize = 12;
 
     let mut block: [u8; 512] = [0u8; 512];
-    file.read(&mut block).map_err(|e| EPubError::IO(e))?;
+    file.read(&mut block)?;
     let (part_type, lba_start, num_blocks) = {
         // We only support Master Boot Record (MBR) partitioned cards, not
         // GUID Partition Table (GPT)

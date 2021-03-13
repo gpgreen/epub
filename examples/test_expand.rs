@@ -98,16 +98,15 @@ fn main() {
 
     let epubname: String<U256> = String::from("RUSTPR~1.EPU");
     let mut epub_file = EPubFile::new(epubname);
-
     match epub_file.expand(EPubFile::EXPAND_DIR, &mut fs) {
-        Ok(()) => println!("Inflated successfully!"),
-        Err(_e) => println!("Inflation unsuccessful!"),
+        Ok(()) => println!("Expanded!"),
+        Err(e) => println!("error"),
     }
 
     //////////////////////////////////////////////////////////////
 
     match epub_file.read_container(&mut fs) {
-        Ok(()) => println!("Read container successfully!"),
-        Err(_e) => println!("Read unsuccessful!"),
+        Ok(()) => println!("container read!"),
+        Err(e) => println!("error"),
     }
 }

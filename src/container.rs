@@ -114,7 +114,7 @@ impl LocalFileHeader {
         // unwrap is safe as length is checked before
         v.resize(file_name_length, 0).unwrap();
         rdr.read_to_array(&mut v)?;
-        let file_name = String::from_utf8(v).map_err(|e| EPubError::UTF8(e))?;
+        let file_name = String::from_utf8(v)?;
         let extra_field = if extra_field_length > 0 {
             let mut fieldvec = Vec::new();
             let mut data_left = extra_field_length;
@@ -204,13 +204,11 @@ impl LocalFileHeader {
 
                 let mut out_start = 0;
                 while out_start < out_consumed {
-                    let n = output_file
-                        .write(&output[out_start..out_consumed])
-                        .map_err(|x| EPubError::<IO>::IO(x))?;
+                    let n = output_file.write(&output[out_start..out_consumed])?;
                     trace!("wrote {} bytes to file", n,);
                     out_start += n;
                 }
-                output_file.flush().map_err(|e| EPubError::<IO>::IO(e))?;
+                output_file.flush()?;
                 count += out_consumed;
             }
             bytes_to_go -= n;
@@ -245,43 +243,37 @@ impl Container {
     }
 
     /// get the container file
-    pub fn get_container_filename<IO: ReadWriteSeek, TP: TimeProvider, OCC: OemCpConverter>(
+    pub fn get_metadata_filenames<IO: ReadWriteSeek, TP: TimeProvider, OCC: OemCpConverter>(
         &self,
         fs: &mut FileSystem<IO, TP, OCC>,
-    ) -> Result<Option<alloc::string::String>, EPubError<IO>> {
+    ) -> Result<Option<(String<U256>, String<U256>)>, EPubError<IO>> {
         let entry_file_name = self.expanded_file_path(Container::EPUB_FILE_POSTCARD)?;
         let root_dir = fs.root_dir();
-        let entry_file = root_dir
-            .open_file(&entry_file_name)
-            .map_err(|e| EPubError::IO(e))?;
+        let entry_file = root_dir.open_file(&entry_file_name)?;
         let mut rdr = BufReader::new(entry_file)?;
         let lines = rdr.read_lines()?;
-        let mut containerv = alloc::vec::Vec::new();
+        let mut opf_str = alloc::string::String::new();
+        let mut container_str = alloc::string::String::new();
         for ln in &lines {
-            let i = ln.len() - 2; // strip off \n
-            if ln[i] == b'f' && ln[i - 1] == b'p' && ln[i - 2] == b'o' && ln[i - 3] == b'.' {
-                containerv.extend(ln.iter().copied());
+            match ln.find(".opf") {
+                Some(_) => opf_str.push_str(&ln[..ln.len() - 1]),
+                None => match ln.find("container.xml") {
+                    Some(_) => container_str.push_str(&ln[..ln.len() - 1]),
+                    None => (),
+                },
+            }
+            if opf_str.len() > 0 && container_str.len() > 0 {
                 break;
             }
         }
-        if containerv.len() > 0 {
-            Ok(Some(
-                alloc::string::String::from_utf8(containerv).map_err(|e| EPubError::FromUTF8(e))?,
-            ))
+        if opf_str.len() > 0 && container_str.len() > 0 {
+            Ok(Some((
+                self.expanded_file_path(&opf_str)?,
+                self.expanded_file_path(&container_str)?,
+            )))
         } else {
             Ok(None)
         }
-    }
-
-    /// open a file from the epub
-    pub fn open_file<'a, IO: ReadWriteSeek, TP: TimeProvider, OCC: OemCpConverter>(
-        &self,
-        file_name: &str,
-        fs: &'a mut FileSystem<IO, TP, OCC>,
-    ) -> Result<File<'a, IO, TP, OCC>, EPubError<IO>> {
-        let file_path = self.expanded_file_path(file_name)?;
-        let root_dir = fs.root_dir();
-        root_dir.open_file(&file_path).map_err(|e| EPubError::IO(e))
     }
 
     /// expand the epub file into the directory
@@ -292,20 +284,14 @@ impl Container {
     ) -> Result<(), EPubError<IO>> {
         // open the epub file
         let root_dir = fs.root_dir();
-        let epub_file = root_dir
-            .open_file(epub_filepath)
-            .map_err(|e| EPubError::IO(e))?;
+        let epub_file = root_dir.open_file(epub_filepath)?;
 
         // create the disk entry file
         info!("creating epub file entry data file");
         let de_filename = self.expanded_file_path(&Container::EPUB_FILE_POSTCARD)?;
-        let mut disk_entry_file = root_dir
-            .create_file(&de_filename.as_str())
-            .map_err(|e| EPubError::IO(e))?;
-        disk_entry_file
-            .write(epub_filepath.as_bytes())
-            .map_err(|e| EPubError::IO(e))?;
-        disk_entry_file.write(b"\n").map_err(|e| EPubError::IO(e))?;
+        let mut disk_entry_file = root_dir.create_file(&de_filename.as_str())?;
+        disk_entry_file.write(epub_filepath.as_bytes())?;
+        disk_entry_file.write(b"\n")?;
 
         // now expand the file
         let mut rdr = BufReader::new(epub_file)?;
@@ -323,9 +309,7 @@ impl Container {
                     if lfh.is_file() {
                         info!("Create file {}", lfh.file_name);
                         let filename = self.expanded_file_path(&lfh.file_name)?;
-                        let mut this_file = root_dir
-                            .create_file(&filename.as_str())
-                            .map_err(|e| EPubError::IO(e))?;
+                        let mut this_file = root_dir.create_file(&filename.as_str())?;
                         // write the file, either compressed or not
                         if lfh.compression_method == 8 {
                             lfh.inflate(&mut rdr, &mut this_file)?;
@@ -333,23 +317,20 @@ impl Container {
                             let mut bytes_to_go = lfh.uncompressed_size as usize;
                             while bytes_to_go > 0 {
                                 let mut n = if bytes_to_go > 256 { 256 } else { bytes_to_go };
-                                let mut arr = [0u8; 256];
-                                n = rdr.read_to_array(&mut arr[0..n])?;
-                                this_file.write(&arr[0..n]).map_err(|e| EPubError::IO(e))?;
+                                let mut v = Vec::<u8, U256>::new();
+                                v.resize(n, 0).unwrap();
+                                n = rdr.read_to_array(&mut v[..n])?;
+                                this_file.write(&v[..n])?;
                                 bytes_to_go -= n;
                             }
                         }
-
-                        disk_entry_file
-                            .write(&lfh.file_name.as_bytes())
-                            .map_err(|e| EPubError::IO(e))?;
-                        disk_entry_file.write(b"\n").map_err(|e| EPubError::IO(e))?;
+                        // add the file entry
+                        disk_entry_file.write(&lfh.file_name.as_bytes())?;
+                        disk_entry_file.write(b"\n")?;
                     } else if lfh.is_dir() {
                         info!("Create directory {}", lfh.file_name);
                         let dirname = self.expanded_file_path(&lfh.file_name)?;
-                        root_dir
-                            .create_dir(&dirname.as_str())
-                            .map_err(|e| EPubError::IO(e))?;
+                        root_dir.create_dir(&dirname.as_str())?;
                     }
                 }
                 if lfh.have_data_descriptor() {

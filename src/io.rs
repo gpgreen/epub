@@ -85,7 +85,7 @@ where
             &mut self.blocks[0][0..BUFBLOCKSIZE]
         };
         // TODO: it may not read all bytes, so need to retry
-        let n = self.file.read(buf).map_err(|e| EPubError::IO(e))?;
+        let n = self.file.read(buf)?;
         if n != BUFBLOCKSIZE {
             trace!("load_block: short load of {} bytes", n);
             // unwraps are safe as n is always less than BUFBLOCKSIZE
@@ -182,33 +182,35 @@ where
     }
 
     /// read lines from file
-    pub fn read_lines(&mut self) -> Result<alloc::vec::Vec<alloc::vec::Vec<u8>>, EPubError<IO>> {
+    pub fn read_lines(&mut self) -> Result<alloc::vec::Vec<alloc::string::String>, EPubError<IO>> {
         // TODO: make sure that file hasn't yet been read
         let mut lines = alloc::vec::Vec::new();
         let mut ln = alloc::vec::Vec::new();
+        trace!("read_lines");
         loop {
             let n = self.blocks[self.block_idx].len();
-            if n == 0 {
-                break;
-            }
             let mut start = 0;
             for i in 0..n {
                 if self.blocks[self.block_idx][i] == b'\n' {
                     ln.extend_from_slice(&self.blocks[self.block_idx][start..i + 1]);
                     let mut newln = alloc::vec::Vec::new();
                     newln.extend(ln.iter().copied());
-                    lines.push(newln);
-                    ln.clear();
+                    lines.push(alloc::string::String::from_utf8(ln)?);
+                    trace!("read_lines line[{}:{}]", start, i + 1);
+                    ln = alloc::vec::Vec::new();
                     start = i + 1;
                 }
             }
             ln.extend_from_slice(&self.blocks[self.block_idx][start..n]);
-            self.load_block()?;
+            if self.load_block()? == 0 {
+                break;
+            }
             self.block_idx ^= 1;
         }
         if ln.len() > 0 {
-            lines.push(ln);
+            lines.push(alloc::string::String::from_utf8(ln)?);
         }
+        trace!("read_lines count {}", lines.len());
         Ok(lines)
     }
 }

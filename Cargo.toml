@@ -16,7 +16,10 @@ log = "0.4"
 
 [dependencies.fatfs]
 #version = "0.3"
+git = "https://github.com/rafalh/rust-fatfs"
+branch = "master"
 default-features = false
+features = ["lfn", "alloc"]
 
 [dependencies.byteorder]
 version = "1"
@@ -28,7 +31,7 @@ branch = "alloc"
 default-features = false
 
 [patch.crates-io]
-fatfs = { path = "../../rust-fatfs" }
+#fatfs = { path = "../../rust-fatfs" }
 
 [dev-dependencies]
 fscommon = "0.1"

@@ -25,9 +25,10 @@ use container::Container;
 use core::str::Utf8Error;
 use fatfs::{FileSystem, OemCpConverter, ReadWriteSeek, TimeProvider};
 use heapless::{consts::*, String};
+use log::{info, trace};
 use miniz_oxide::inflate::TINFLStatus;
-
-use log::info;
+use package::Package;
+use xml;
 
 /// an error
 #[derive(Debug)]
@@ -47,6 +48,34 @@ where
     IO(fatfs::Error<IO::Error>),
     UTF8(Utf8Error),
     FromUTF8(FromUtf8Error),
+    XmlParseErr(xml::ParserError),
+}
+
+impl<IO> From<fatfs::Error<IO::Error>> for EPubError<IO>
+where
+    IO: ReadWriteSeek,
+{
+    fn from(error: fatfs::Error<IO::Error>) -> Self {
+        EPubError::IO(error)
+    }
+}
+
+impl<IO> From<Utf8Error> for EPubError<IO>
+where
+    IO: ReadWriteSeek,
+{
+    fn from(error: Utf8Error) -> Self {
+        EPubError::UTF8(error)
+    }
+}
+
+impl<IO> From<FromUtf8Error> for EPubError<IO>
+where
+    IO: ReadWriteSeek,
+{
+    fn from(error: FromUtf8Error) -> Self {
+        EPubError::FromUTF8(error)
+    }
 }
 
 /// An epub file
@@ -59,6 +88,16 @@ pub struct EPubFile {
 impl<IO> std::fmt::Debug for EPubError<IO>
 where
     IO: ReadWriteSeek,
+{
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_'>) -> std::fmt::Result {
+        f.debug_enum("EPubError")?;
+    }
+}
+
+#[cfg(feature = "std")]
+impl<T: Error<std::io::Error>> std::fmt::Debug for EPubError<T>
+where
+    T: ReadWriteSeek,
 {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_'>) -> std::fmt::Result {
         f.debug_enum("EPubError")?;
@@ -102,7 +141,13 @@ impl EPubFile {
         fs: &mut FileSystem<IO, TP, OCC>,
     ) -> Result<(), EPubError<IO>> {
         if let Some(con) = &self.container {
-            let fname = con.get_container_filename(fs)?;
+            let res = con.get_metadata_filenames(fs)?;
+            if let Some((opf_filename, container_filename)) = &res {
+                trace!("Found opf: {}", opf_filename);
+                trace!("Found container: {}", container_filename);
+                let pkg = Package::read(opf_filename, container_filename, fs)?;
+                info!("Package read: {:?}", pkg);
+            }
         } else {
             panic!();
         };
