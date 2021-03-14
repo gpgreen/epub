@@ -9,7 +9,6 @@ edition = "2018"
 example = ["fatfs/std", "fatfs/alloc", "fatfs/chrono", "byteorder/std"]
 
 [dependencies]
-heapless = "0.6"
 embedded-sdmmc = "0.3"
 miniz_oxide = "0.4"
 log = "0.4"

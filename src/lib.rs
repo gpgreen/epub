@@ -17,14 +17,12 @@ pub mod io;
 pub mod mbr;
 pub mod package;
 
-//#[macro_use]
 extern crate alloc;
 
-use alloc::string::FromUtf8Error;
+use alloc::{string::FromUtf8Error, string::String};
 use container::Container;
 use core::str::Utf8Error;
 use fatfs::{FileSystem, OemCpConverter, ReadWriteSeek, TimeProvider};
-use heapless::{consts::*, String};
 use log::{info, trace};
 use miniz_oxide::inflate::TINFLStatus;
 use package::Package;
@@ -36,14 +34,10 @@ pub enum EPubError<IO>
 where
     IO: ReadWriteSeek,
 {
-    TooManyFileEntries,
-    ReadTruncated,
-    EmptyFile,
     InvalidLocalHeader,
     Unimplemented,
     FormatError(&'static str),
     NoSuchVolume,
-    PathTooLong,
     Decompress(TINFLStatus),
     IO(fatfs::Error<IO::Error>),
     UTF8(Utf8Error),
@@ -80,7 +74,7 @@ where
 
 /// An epub file
 pub struct EPubFile {
-    filepath: String<U256>,
+    filepath: String,
     container: Option<Container>,
 }
 
@@ -108,7 +102,7 @@ impl EPubFile {
     pub const EXPAND_DIR: &'static str = "CUR_BOOK";
 
     /// create EPubFile with a filename path
-    pub fn new(filepath: String<U256>) -> EPubFile {
+    pub fn new(filepath: String) -> EPubFile {
         let container = None;
         EPubFile {
             filepath,
@@ -141,11 +135,10 @@ impl EPubFile {
         fs: &mut FileSystem<IO, TP, OCC>,
     ) -> Result<(), EPubError<IO>> {
         if let Some(con) = &self.container {
-            let res = con.get_metadata_filenames(fs)?;
-            if let Some((opf_filename, container_filename)) = &res {
-                trace!("Found opf: {}", opf_filename);
-                trace!("Found container: {}", container_filename);
-                let pkg = Package::read(opf_filename, container_filename, fs)?;
+            let res = con.get_container_rootfile(fs)?;
+            if let Some(root_file) = &res {
+                trace!("Found root_file: {:?}", root_file);
+                let pkg = Package::read(&root_file.full_path, fs)?;
                 info!("Package read: {:?}", pkg);
             }
         } else {

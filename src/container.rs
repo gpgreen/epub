@@ -1,19 +1,20 @@
 use crate::io::BufReader;
 use crate::EPubError;
+use alloc::{string::String, vec::Vec};
 use fatfs::{File, FileSystem, OemCpConverter, ReadWriteSeek, TimeProvider, Write};
-use heapless::{consts::*, String, Vec};
 use log::{info, trace};
 use miniz_oxide::inflate::{core, TINFLStatus};
+use xml::{Event, Parser, StartTag};
 
 /// represents an extra section from the extra field portion of a LocalFileHeader
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct ExtraHeader {
     pub id: u16,
-    pub data: Vec<u8, U256>,
+    pub data: Vec<u8>,
 }
 
 /// represents a Local File Header from the zip specification
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct LocalFileHeader {
     pub extract_version: u16,
     pub general_purpose_flag: u16,
@@ -23,13 +24,13 @@ pub struct LocalFileHeader {
     pub crc32: u32,
     pub compressed_size: u32,
     pub uncompressed_size: u32,
-    pub file_name: String<U256>,
-    pub extra_field: Option<Vec<ExtraHeader, U8>>,
+    pub file_name: String,
+    pub extra_field: Option<Vec<ExtraHeader>>,
     pub data_descriptor: Option<DataDescriptor>,
 }
 
 /// represents a data descriptor
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct DataDescriptor {
     pub crc32: u32,
     pub compressed_size: u32,
@@ -107,12 +108,8 @@ impl LocalFileHeader {
         let uncompressed_size = rdr.read4()?;
         let file_name_length = rdr.read2()? as usize;
         let extra_field_length = rdr.read2()? as usize;
-        if file_name_length > 256 {
-            return Err(EPubError::ReadTruncated);
-        }
         let mut v = Vec::new();
-        // unwrap is safe as length is checked before
-        v.resize(file_name_length, 0).unwrap();
+        v.resize(file_name_length, 0);
         rdr.read_to_array(&mut v)?;
         let file_name = String::from_utf8(v)?;
         let extra_field = if extra_field_length > 0 {
@@ -121,15 +118,11 @@ impl LocalFileHeader {
             while data_left > 0 {
                 let id = rdr.read2()?;
                 let data_len = rdr.read2()? as usize;
-                if data_len > 256 {
-                    return Err(EPubError::ReadTruncated);
-                }
                 let mut data = Vec::new();
-                // unwrap is safe as length is checked before
-                data.resize(data_len, 0).unwrap();
+                data.resize(data_len, 0);
                 rdr.read_to_array(&mut data)?;
                 let ef = ExtraHeader { id, data };
-                fieldvec.push(ef).map_err(|_| EPubError::ReadTruncated)?;
+                fieldvec.push(ef);
                 data_left -= data_len + 4;
             }
             Some(fieldvec)
@@ -228,12 +221,12 @@ impl LocalFileHeader {
 /// to other parts of the library
 #[derive(Clone)]
 pub struct Container {
-    expanded_dir_path: String<U256>,
+    expanded_dir_path: String,
 }
 
 impl Container {
     const CENTRAL_DIR_FILE_HEADER: u32 = 0x02014b50;
-    const EPUB_FILE_POSTCARD: &'static str = "fentry.txt";
+    const EPUB_CONTAINER_FILE: &'static str = "META-INF/container.xml";
 
     /// create new container rooted at given directory
     pub fn new(dir_path: &str) -> Container {
@@ -242,38 +235,59 @@ impl Container {
         }
     }
 
-    /// get the container file
-    pub fn get_metadata_filenames<IO: ReadWriteSeek, TP: TimeProvider, OCC: OemCpConverter>(
+    /// get the root file entry from container.xml
+    pub fn get_container_rootfile<IO: ReadWriteSeek, TP: TimeProvider, OCC: OemCpConverter>(
         &self,
         fs: &mut FileSystem<IO, TP, OCC>,
-    ) -> Result<Option<(String<U256>, String<U256>)>, EPubError<IO>> {
-        let entry_file_name = self.expanded_file_path(Container::EPUB_FILE_POSTCARD)?;
+    ) -> Result<Option<Rootfile>, EPubError<IO>> {
+        let container_file_name: String = self.expanded_file_path(Container::EPUB_CONTAINER_FILE);
         let root_dir = fs.root_dir();
-        let entry_file = root_dir.open_file(&entry_file_name)?;
-        let mut rdr = BufReader::new(entry_file)?;
+        let container_file = root_dir.open_file(&container_file_name)?;
+        let mut rdr = BufReader::new(container_file)?;
+        let mut p = Parser::new();
+        let mut stack: Vec<Event> = Vec::new();
+        let mut in_rootfiles = false;
+        let mut root_file: Option<Rootfile> = None;
         let lines = rdr.read_lines()?;
-        let mut opf_str = alloc::string::String::new();
-        let mut container_str = alloc::string::String::new();
-        for ln in &lines {
-            match ln.find(".opf") {
-                Some(_) => opf_str.push_str(&ln[..ln.len() - 1]),
-                None => match ln.find("container.xml") {
-                    Some(_) => container_str.push_str(&ln[..ln.len() - 1]),
-                    None => (),
-                },
-            }
-            if opf_str.len() > 0 && container_str.len() > 0 {
-                break;
+        for ln in lines {
+            p.feed_str(&ln);
+            for event in &mut p {
+                match event {
+                    Ok(e) => match e {
+                        Event::PI(s) => info!("PI({})", s),
+                        Event::ElementStart(tag) => {
+                            info!("Start({})", tag.name);
+                            if tag.name == "rootfiles" {
+                                in_rootfiles = true;
+                            }
+                            stack.push(Event::ElementStart(tag))
+                        }
+                        Event::ElementEnd(tag) => {
+                            info!("End({})", tag.name);
+                            if let Some(last) = stack.pop() {
+                                match last {
+                                    Event::ElementStart(start_tag) => {
+                                        if tag.name == "rootfiles" {
+                                            in_rootfiles = false;
+                                        }
+                                        if in_rootfiles {
+                                            root_file = Some(Rootfile::new(
+                                                &start_tag,
+                                                &self.expanded_dir_path,
+                                            ));
+                                        }
+                                    }
+                                    _ => (),
+                                }
+                            }
+                        }
+                        _ => (),
+                    },
+                    Err(e) => return Err(EPubError::XmlParseErr(e)),
+                }
             }
         }
-        if opf_str.len() > 0 && container_str.len() > 0 {
-            Ok(Some((
-                self.expanded_file_path(&opf_str)?,
-                self.expanded_file_path(&container_str)?,
-            )))
-        } else {
-            Ok(None)
-        }
+        Ok(root_file)
     }
 
     /// expand the epub file into the directory
@@ -288,7 +302,7 @@ impl Container {
 
         // create the disk entry file
         info!("creating epub file entry data file");
-        let de_filename = self.expanded_file_path(&Container::EPUB_FILE_POSTCARD)?;
+        let de_filename = self.expanded_file_path("fentry.txt");
         let mut disk_entry_file = root_dir.create_file(&de_filename.as_str())?;
         disk_entry_file.write(epub_filepath.as_bytes())?;
         disk_entry_file.write(b"\n")?;
@@ -308,7 +322,7 @@ impl Container {
                 if lfh.compression_method == 0 || lfh.compression_method == 8 {
                     if lfh.is_file() {
                         info!("Create file {}", lfh.file_name);
-                        let filename = self.expanded_file_path(&lfh.file_name)?;
+                        let filename = self.expanded_file_path(&lfh.file_name);
                         let mut this_file = root_dir.create_file(&filename.as_str())?;
                         // write the file, either compressed or not
                         if lfh.compression_method == 8 {
@@ -317,8 +331,8 @@ impl Container {
                             let mut bytes_to_go = lfh.uncompressed_size as usize;
                             while bytes_to_go > 0 {
                                 let mut n = if bytes_to_go > 256 { 256 } else { bytes_to_go };
-                                let mut v = Vec::<u8, U256>::new();
-                                v.resize(n, 0).unwrap();
+                                let mut v = Vec::new();
+                                v.resize(n, 0);
                                 n = rdr.read_to_array(&mut v[..n])?;
                                 this_file.write(&v[..n])?;
                                 bytes_to_go -= n;
@@ -329,7 +343,7 @@ impl Container {
                         disk_entry_file.write(b"\n")?;
                     } else if lfh.is_dir() {
                         info!("Create directory {}", lfh.file_name);
-                        let dirname = self.expanded_file_path(&lfh.file_name)?;
+                        let dirname = self.expanded_file_path(&lfh.file_name);
                         root_dir.create_dir(&dirname.as_str())?;
                     }
                 }
@@ -350,14 +364,43 @@ impl Container {
         Ok(())
     }
     /// create a file path under the epub directory, with the given filename
-    fn expanded_file_path<IO: ReadWriteSeek>(
-        &self,
-        fname: &str,
-    ) -> Result<String<U256>, EPubError<IO>> {
+    fn expanded_file_path(&self, fname: &str) -> String {
         let mut s = String::from(self.expanded_dir_path.as_str());
-        s.push_str("/").map_err(|_e| EPubError::PathTooLong)?;
-        s.push_str(fname).map_err(|_e| EPubError::PathTooLong)?;
-        Ok(s)
+        s.push_str("/");
+        s.push_str(fname);
+        s
+    }
+}
+
+/*
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
+        <rootfiles>
+                <rootfile full-path="OEBPS/9781718500457.opf" media-type="application/oebps-package+xml" />
+        </rootfiles>
+</container>
+*/
+/// represents rootfile section from container.xml
+#[derive(Debug)]
+pub struct Rootfile {
+    pub full_path: String,
+    pub media_type: String,
+}
+
+impl Rootfile {
+    pub fn new(tag: &StartTag, leading_dir: &str) -> Rootfile {
+        if let Some(fp) = tag.attributes.get(&(String::from("full-path"), None)) {
+            if let Some(mtype) = tag.attributes.get(&(String::from("media-type"), None)) {
+                Rootfile {
+                    full_path: String::from(leading_dir) + "/" + fp,
+                    media_type: String::from(mtype),
+                }
+            } else {
+                panic!();
+            }
+        } else {
+            panic!();
+        }
     }
 }
 
@@ -366,17 +409,8 @@ use super::*;
 
 mod tests {
 
-    // read trait requires
-    // fn read(&mut self, buf: &mut [u8]) -> Result<usize>;
-
     #[test]
     fn it_works() {
-        //        let mut rdr: Vec<U256> = Vec::new();
-        //        rdr.push(0);
-        //        rdr.push(0);
-        //        rdr.push(0);
-        //        rdr.push(2);
-
         //        assert_eq!(2, read4(rdr));
     }
 }

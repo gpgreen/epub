@@ -16,12 +16,13 @@
 //! $ cargo run --example test_expand -- ./disk.img
 //! ```
 
+extern crate alloc;
+
 const FILE_TO_PRINT: &'static str = "README.TXT";
 
-use epub::package::Package;
+use alloc::string::String;
 use epub::EPubFile;
 use fscommon::{BufStream, StreamSlice};
-use heapless::{consts::*, String};
 use mbr;
 //use std::env;
 use std::io::prelude::*;
@@ -96,7 +97,7 @@ fn main() {
     }
     //////////////////////////////////////////////////////////////
 
-    let epubname: String<U256> = String::from("RUSTPR~1.EPU");
+    let epubname = String::from("RustProgrammingLanguage2018.epub");
     let mut epub_file = EPubFile::new(epubname);
     match epub_file.expand(EPubFile::EXPAND_DIR, &mut fs) {
         Ok(()) => println!("Expanded!"),

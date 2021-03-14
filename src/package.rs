@@ -4,7 +4,6 @@ use alloc::{string::String, vec::Vec};
 use fatfs::{FileSystem, OemCpConverter, ReadWriteSeek, Seek, SeekFrom, TimeProvider};
 use log::{info, trace, warn};
 use xml::{Event, Parser, StartTag};
-
 /*
 <?xml version="1.0" encoding="UTF-8"?>
 <package xmlns="http://www.idpf.org/2007/opf" version="3.0" xml:lang="en" unique-identifier="p9781718500457">
@@ -201,7 +200,6 @@ impl Package {
     /// read the package data from the file
     pub fn read<IO: ReadWriteSeek, TP: TimeProvider, OCC: OemCpConverter>(
         opf_file_name: &str,
-        _container_file_name: &str,
         fs: &mut FileSystem<IO, TP, OCC>,
     ) -> Result<Package, EPubError<IO>> {
         let root_dir = fs.root_dir();
