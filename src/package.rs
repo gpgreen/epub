@@ -1,180 +1,12 @@
+//! the EPub Package Document
+//! https://www.w3.org/publishing/epub32/epub-packages.html#sec-package-doc
+
 use crate::io::BufReader;
 use crate::EPubError;
 use alloc::{string::String, vec::Vec};
 use fatfs::{FileSystem, OemCpConverter, ReadWriteSeek, Seek, SeekFrom, TimeProvider};
 use log::{info, trace, warn};
 use xml::{Event, Parser, StartTag};
-/*
-<?xml version="1.0" encoding="UTF-8"?>
-<package xmlns="http://www.idpf.org/2007/opf" version="3.0" xml:lang="en" unique-identifier="p9781718500457">
-<metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
-<dc:title>The Rust Programming Language</dc:title>
-<dc:creator>Steve Klabnik</dc:creator>
-<dc:creator>Carol Nichols</dc:creator>
-<dc:date>2019</dc:date>
-<meta property="dcterms:modified">2019-07-30T12:00:00Z</meta>
-<dc:source id="src-id">urn:isbn:9781718500457</dc:source>
-<dc:identifier id="p9781718500457">9781718500457</dc:identifier>
-<dc:coverage>San Francisco</dc:coverage>
-<dc:format>562 pages</dc:format>
-<dc:type>Text</dc:type>
-<dc:language>en</dc:language>
-<dc:rights>All rights reserved.</dc:rights>
-<dc:publisher>No Starch Press, Inc.</dc:publisher>
-<meta name="cover" content="cover-image"/>
-</metadata>
-<manifest>
-<item id="ncxtoc" media-type="application/x-dtbncx+xml" href="toc.ncx"/>
-<item id="css" href="styles/9781718500457.css" media-type="text/css"/>
-<item id="nav" href="xhtml/nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>
-<item id="font1" href="fonts/UbuntuMono-Regular.ttf" media-type="application/vnd.ms-opentype"/>
-<item id="font2" href="fonts/UbuntuMono-Bold.ttf" media-type="application/vnd.ms-opentype"/>
-<item id="font3" href="fonts/UbuntuMono-Italic.ttf" media-type="application/vnd.ms-opentype"/>
-<item id="font4" href="fonts/UbuntuMono-BoldItalic.ttf" media-type="application/vnd.ms-opentype"/>
-<item id="font5" href="fonts/JansonTextLTStd-Bold.otf" media-type="application/vnd.ms-opentype"/>
-<item id="font6" href="fonts/JansonTextLTStd-BoldItalic.otf" media-type="application/vnd.ms-opentype"/>
-<item id="font7" href="fonts/JansonTextLTStd-Italic.otf" media-type="application/vnd.ms-opentype"/>
-<item id="font8" href="fonts/JansonTextLTStd-Roman.otf" media-type="application/vnd.ms-opentype"/>
-<item id="font9" href="fonts/TradeGothicLTStd-Bold.otf" media-type="application/vnd.ms-opentype"/>
-<item id="font10" href="fonts/TradeGothicLTStd-BoldObl.otf" media-type="application/vnd.ms-opentype"/>
-<item id="font11" href="fonts/TradeGothicLTStd.otf" media-type="application/vnd.ms-opentype"/>
-<item id="font12" href="fonts/TradeGothicLTStd-Obl.otf" media-type="application/vnd.ms-opentype"/>
-<item id="font13" href="fonts/ARIALUNI.ttf" media-type="application/vnd.ms-opentype"/>
-<item id="cover" href="xhtml/cover.xhtml" media-type="application/xhtml+xml"/>
-<item id="title" href="xhtml/title.xhtml" media-type="application/xhtml+xml"/>
-<item id="copy" href="xhtml/copy.xhtml" media-type="application/xhtml+xml"/>
-<item id="author" href="xhtml/author.xhtml" media-type="application/xhtml+xml"/>
-<item id="toc01" href="xhtml/toc01.xhtml" media-type="application/xhtml+xml"/>
-<item id="toc" href="xhtml/toc.xhtml" media-type="application/xhtml+xml"/>
-<item id="foreword" href="xhtml/foreword.xhtml" media-type="application/xhtml+xml"/>
-<item id="preface" href="xhtml/preface.xhtml" media-type="application/xhtml+xml"/>
-<item id="ack" href="xhtml/ack.xhtml" media-type="application/xhtml+xml"/>
-<item id="intro" href="xhtml/intro.xhtml" media-type="application/xhtml+xml"/>
-<item id="ch01" href="xhtml/ch01.xhtml" media-type="application/xhtml+xml"/>
-<item id="ch02" href="xhtml/ch02.xhtml" media-type="application/xhtml+xml"/>
-<item id="ch03" href="xhtml/ch03.xhtml" media-type="application/xhtml+xml"/>
-<item id="ch04" href="xhtml/ch04.xhtml" media-type="application/xhtml+xml"/>
-<item id="ch05" href="xhtml/ch05.xhtml" media-type="application/xhtml+xml"/>
-<item id="ch06" href="xhtml/ch06.xhtml" media-type="application/xhtml+xml"/>
-<item id="ch07" href="xhtml/ch07.xhtml" media-type="application/xhtml+xml"/>
-<item id="ch08" href="xhtml/ch08.xhtml" media-type="application/xhtml+xml"/>
-<item id="ch09" href="xhtml/ch09.xhtml" media-type="application/xhtml+xml"/>
-<item id="ch10" href="xhtml/ch10.xhtml" media-type="application/xhtml+xml"/>
-<item id="ch11" href="xhtml/ch11.xhtml" media-type="application/xhtml+xml"/>
-<item id="ch12" href="xhtml/ch12.xhtml" media-type="application/xhtml+xml"/>
-<item id="ch13" href="xhtml/ch13.xhtml" media-type="application/xhtml+xml"/>
-<item id="ch14" href="xhtml/ch14.xhtml" media-type="application/xhtml+xml"/>
-<item id="ch15" href="xhtml/ch15.xhtml" media-type="application/xhtml+xml"/>
-<item id="ch16" href="xhtml/ch16.xhtml" media-type="application/xhtml+xml"/>
-<item id="ch17" href="xhtml/ch17.xhtml" media-type="application/xhtml+xml"/>
-<item id="ch18" href="xhtml/ch18.xhtml" media-type="application/xhtml+xml"/>
-<item id="ch19" href="xhtml/ch19.xhtml" media-type="application/xhtml+xml"/>
-<item id="ch20" href="xhtml/ch20.xhtml" media-type="application/xhtml+xml"/>
-<item id="app01" href="xhtml/app01.xhtml" media-type="application/xhtml+xml"/>
-<item id="app02" href="xhtml/app02.xhtml" media-type="application/xhtml+xml"/>
-<item id="app03" href="xhtml/app03.xhtml" media-type="application/xhtml+xml"/>
-<item id="app04" href="xhtml/app04.xhtml" media-type="application/xhtml+xml"/>
-<item id="app05" href="xhtml/app05.xhtml" media-type="application/xhtml+xml"/>
-<item id="index" href="xhtml/index.xhtml" media-type="application/xhtml+xml"/>
-<item id="bm01" href="xhtml/bm01.xhtml" media-type="application/xhtml+xml"/>
-<item id="bm02" href="xhtml/bm02.xhtml" media-type="application/xhtml+xml"/>
-<item id="bm03" href="xhtml/bm03.xhtml" media-type="application/xhtml+xml"/>
-<item id="cover-image" href="images/9781718500457.jpg" media-type="image/jpeg"/>
-<item id="a04fig01" href="images/04fig01.jpg" media-type="image/jpeg"/>
-<item id="a04fig02" href="images/04fig02.jpg" media-type="image/jpeg"/>
-<item id="a04fig03" href="images/04fig03.jpg" media-type="image/jpeg"/>
-<item id="a04fig03a" href="images/question.jpg" media-type="image/jpeg"/>
-<item id="a04fig04" href="images/04fig04.jpg" media-type="image/jpeg"/>
-<item id="a04fig05" href="images/04fig05.jpg" media-type="image/jpeg"/>
-<item id="a04fig06" href="images/04fig06.jpg" media-type="image/jpeg"/>
-<item id="a14fig01" href="images/14fig01.jpg" media-type="image/jpeg"/>
-<item id="a14fig02" href="images/14fig02.jpg" media-type="image/jpeg"/>
-<item id="a14fig03" href="images/14fig03.jpg" media-type="image/jpeg"/>
-<item id="a14fig04" href="images/14fig04.jpg" media-type="image/jpeg"/>
-<item id="a15fig01" href="images/15fig01.jpg" media-type="image/jpeg"/>
-<item id="a15fig02" href="images/15fig02.jpg" media-type="image/jpeg"/>
-<item id="a15fig03" href="images/15fig03.jpg" media-type="image/jpeg"/>
-<item id="a15fig04" href="images/15fig04.jpg" media-type="image/jpeg"/>
-<item id="a20fig01" href="images/20fig01.jpg" media-type="image/jpeg"/>
-<item id="acommon" href="images/common.jpg" media-type="image/jpeg"/>
-<item id="af0529-01" href="images/f0529-01.jpg" media-type="image/jpeg"/>
-<item id="af0529-02" href="images/f0529-02.jpg" media-type="image/jpeg"/>
-<item id="af0529-03" href="images/f0529-03.jpg" media-type="image/jpeg"/>
-<item id="af0529-04" href="images/f0529-04.jpg" media-type="image/jpeg"/>
-<item id="af0529-05" href="images/f0529-05.jpg" media-type="image/jpeg"/>
-<item id="af0529-06" href="images/f0529-06.jpg" media-type="image/jpeg"/>
-<item id="alogo" href="images/logo.jpg" media-type="image/jpeg"/>
-<item id="alogo1" href="images/logo1.jpg" media-type="image/jpeg"/>
-<item id="apub" href="images/pub.jpg" media-type="image/jpeg"/>
-<item id="aaa1" href="images/backcover.jpg" media-type="image/jpeg"/>
-<item id="aaa2" href="images/listing7-2.jpg" media-type="image/jpeg"/>
-<item id="aaa3" href="images/pagae303.jpg" media-type="image/jpeg"/>
-<item id="aaa4" href="images/pagae304.jpg" media-type="image/jpeg"/>
-<item id="aaa5" href="images/page142.jpg" media-type="image/jpeg"/>
-<item id="aaa6" href="images/page142a.jpg" media-type="image/jpeg"/>
-<item id="aaa7" href="images/page142b.jpg" media-type="image/jpeg"/>
-<item id="aaa8" href="images/page142c.jpg" media-type="image/jpeg"/>
-<item id="aaa9" href="images/page143d.jpg" media-type="image/jpeg"/>
-<item id="aaa10" href="images/page143f.jpg" media-type="image/jpeg"/>
-<item id="aaa11" href="images/page143g.jpg" media-type="image/jpeg"/>
-<item id="aaa12" href="images/page143h.jpg" media-type="image/jpeg"/>
-<item id="aaa13" href="images/page40.jpg" media-type="image/jpeg"/>
-<item id="aaa14" href="images/page_138_01.jpg" media-type="image/jpeg"/>
-<item id="aaa15" href="images/page_138_02.jpg" media-type="image/jpeg"/>
-<item id="aaa16" href="images/page_138_03.jpg" media-type="image/jpeg"/>
-<item id="aaa17" href="images/page_138_04.jpg" media-type="image/jpeg"/>
-<item id="aaa18" href="images/page_138_05.jpg" media-type="image/jpeg"/>
-<item id="aaa19" href="images/page_138_06.jpg" media-type="image/jpeg"/>
-<item id="aaa20" href="images/page_138_08.jpg" media-type="image/jpeg"/>
-</manifest>
-<spine toc="ncxtoc">
-<itemref idref="cover"/>
-<itemref idref="title"/>
-<itemref idref="copy"/>
-<itemref idref="author"/>
-<itemref idref="toc01"/>
-<itemref idref="toc"/>
-<itemref idref="foreword"/>
-<itemref idref="preface"/>
-<itemref idref="ack"/>
-<itemref idref="intro"/>
-<itemref idref="ch01"/>
-<itemref idref="ch02"/>
-<itemref idref="ch03"/>
-<itemref idref="ch04"/>
-<itemref idref="ch05"/>
-<itemref idref="ch06"/>
-<itemref idref="ch07"/>
-<itemref idref="ch08"/>
-<itemref idref="ch09"/>
-<itemref idref="ch10"/>
-<itemref idref="ch11"/>
-<itemref idref="ch12"/>
-<itemref idref="ch13"/>
-<itemref idref="ch14"/>
-<itemref idref="ch15"/>
-<itemref idref="ch16"/>
-<itemref idref="ch17"/>
-<itemref idref="ch18"/>
-<itemref idref="ch19"/>
-<itemref idref="ch20"/>
-<itemref idref="app01"/>
-<itemref idref="app02"/>
-<itemref idref="app03"/>
-<itemref idref="app04"/>
-<itemref idref="app05"/>
-<itemref idref="index"/>
-<itemref idref="bm01"/>
-<itemref idref="bm02"/>
-<itemref idref="bm03"/>
-</spine>
-<guide>
-<reference title="Cover Page" type="cover" href="xhtml/cover.xhtml"/>
-<reference title="Title Page" type="text" href="xhtml/title.xhtml"/>
-<reference title="Contents in Detail" type="toc" href="xhtml/toc.xhtml"/>
-</guide>
-</package>
-*/
 
 /// Package from EPub file
 #[derive(Debug)]
@@ -205,6 +37,7 @@ impl Package {
         let root_dir = fs.root_dir();
         // open the file
         let mut opf_file = root_dir.open_file(&opf_file_name)?;
+        info!("Opened '{}' package", opf_file_name);
         let _file_len = opf_file.seek(SeekFrom::End(0))?;
         opf_file.seek(SeekFrom::Start(0))?;
         let mut rdr = BufReader::new(opf_file)?;
@@ -229,7 +62,7 @@ impl Package {
                     Ok(e) => match e {
                         Event::PI(s) => info!("PI({})", s),
                         Event::ElementStart(tag) => {
-                            info!("Start({})", tag.name);
+                            trace!("Start({})", tag.name);
                             if tag.name == "metadata" {
                                 in_metadata = true;
                             } else if tag.name == "manifest" {
@@ -239,9 +72,10 @@ impl Package {
                                 spine.add_tag(&tag);
                             }
                             stack.push(Event::ElementStart(tag));
+                            chars = String::new();
                         }
                         Event::ElementEnd(tag) => {
-                            info!("End({})", tag.name);
+                            trace!("End({})", tag.name);
                             if let Some(last) = stack.pop() {
                                 match last {
                                     Event::ElementStart(start_tag) => {
@@ -271,7 +105,6 @@ impl Package {
                                                 chars
                                             );
                                         }
-                                        chars = String::new();
                                         assert!(start_tag.name == tag.name);
                                     }
                                     _ => (),
@@ -293,6 +126,7 @@ impl Package {
                 }
             }
         }
+        info!("Finished parsing '{}' package", opf_file_name);
         if let Some(uid) = package_uid {
             if let Some(ver) = version {
                 Ok(Package {
@@ -685,7 +519,7 @@ mod tests {
         for event in p {
             match event.unwrap() {
                 xml::Event::ElementStart(tag) => {
-                    let itm = Item::new(&tag);
+                    let _itm = Item::new(&tag);
                 }
                 _ => (),
             }
@@ -737,7 +571,7 @@ mod tests {
         for event in p {
             match event.unwrap() {
                 xml::Event::ElementStart(tag) => {
-                    let itmref = ItemRef::new(&tag);
+                    let _itmref = ItemRef::new(&tag);
                 }
                 _ => (),
             }

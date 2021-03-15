@@ -101,13 +101,13 @@ fn main() {
     let mut epub_file = EPubFile::new(epubname);
     match epub_file.expand(EPubFile::EXPAND_DIR, &mut fs) {
         Ok(()) => println!("Expanded!"),
-        Err(e) => println!("error"),
+        Err(_e) => println!("error"),
     }
 
     //////////////////////////////////////////////////////////////
 
     match epub_file.read_container(&mut fs) {
         Ok(()) => println!("container read!"),
-        Err(e) => println!("error"),
+        Err(_e) => println!("error"),
     }
 }

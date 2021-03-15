@@ -1,9 +1,7 @@
 //! # epub
+//! https://www.w3.org/publishing/epub32/epub-spec.html
 //!
 //! > Library for reading an epub format ebook
-//!
-//! this crate needs alloc, because the decompression library needs dynamic
-//! vectors
 
 // ****************************************************************************
 //
@@ -15,7 +13,15 @@
 pub mod container;
 pub mod io;
 pub mod mbr;
+pub mod navigation;
 pub mod package;
+
+// for testing we want to have std available
+#[cfg(test)]
+extern crate std;
+#[cfg(test)]
+#[allow(unused_imports)]
+use std::prelude::*;
 
 extern crate alloc;
 
@@ -34,6 +40,7 @@ pub enum EPubError<IO>
 where
     IO: ReadWriteSeek,
 {
+    InvalidXml,
     InvalidLocalHeader,
     Unimplemented,
     FormatError(&'static str),

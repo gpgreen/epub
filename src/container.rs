@@ -1,3 +1,6 @@
+//! the EPub Container
+//! https://www.w3.org/publishing/epub32/epub-ocf.html#sec-container-zip
+
 use crate::io::BufReader;
 use crate::EPubError;
 use alloc::{string::String, vec::Vec};
@@ -372,6 +375,13 @@ impl Container {
     }
 }
 
+/// represents rootfile section from container.xml
+#[derive(Debug)]
+pub struct Rootfile {
+    pub full_path: String,
+    pub media_type: String,
+}
+
 /*
 <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
@@ -380,12 +390,6 @@ impl Container {
         </rootfiles>
 </container>
 */
-/// represents rootfile section from container.xml
-#[derive(Debug)]
-pub struct Rootfile {
-    pub full_path: String,
-    pub media_type: String,
-}
 
 impl Rootfile {
     pub fn new(tag: &StartTag, leading_dir: &str) -> Rootfile {
@@ -405,12 +409,44 @@ impl Rootfile {
 }
 
 #[cfg(test)]
-use super::*;
-
 mod tests {
 
+    use super::*;
+
     #[test]
-    fn it_works() {
-        //        assert_eq!(2, read4(rdr));
+    fn test_rootfile() {
+        let mut p = xml::Parser::new();
+        // feed data to be parsed
+        p.feed_str("<rootfile full-path=\"OEBPS/9781718500457.opf\" media-type=\"application/oebps-package+xml\" />");
+
+        // get events for the fed data
+        for event in p {
+            match event.unwrap() {
+                xml::Event::ElementStart(tag) => {
+                    let rootfile = Rootfile::new(&tag, &"CUR_BOOK");
+                    assert_eq!(rootfile.full_path, "CUR_BOOK/OEBPS/9781718500457.opf");
+                    assert_eq!(rootfile.media_type, "application/oebps-package+xml");
+                }
+                _ => (),
+            }
+        }
+    }
+
+    #[test]
+    #[should_panic]
+    fn test_badrootfile() {
+        let mut p = xml::Parser::new();
+        // feed data to be parsed
+        p.feed_str("<rootfile full-paths=\"OEBPS/9781718500457.opf\" media-type=\"application/oebps-package+xml\" />");
+
+        // get events for the fed data
+        for event in p {
+            match event.unwrap() {
+                xml::Event::ElementStart(tag) => {
+                    let _ = Rootfile::new(&tag, &"CUR_BOOK");
+                }
+                _ => (),
+            }
+        }
     }
 }

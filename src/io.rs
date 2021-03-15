@@ -1,3 +1,5 @@
+//! reading EPub documents
+
 use crate::EPubError;
 use alloc::{string::String, vec::Vec};
 use byteorder::{ByteOrder, LittleEndian};
