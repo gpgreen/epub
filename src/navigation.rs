@@ -1,16 +1,16 @@
 //! the EPub Navigation Document
 //! https://www.w3.org/publishing/epub32/epub-packages.html#sec-package-nav
 
-use crate::{io::BufReader, EPubError};
+use crate::{io::BufReader, package::Meta, EPubError};
 use alloc::{string::String, vec::Vec};
 use fatfs::{FileSystem, OemCpConverter, ReadWriteSeek, TimeProvider};
-use log::{info, trace};
+use log::{info, trace, warn};
 use xml::{Event, Parser, StartTag};
 
 /// TOC from EPub file
 #[derive(Debug)]
 pub struct Toc {
-    pub uid: String,
+    pub meta_entries: Vec<Meta>,
     pub doc_title: String,
     pub nav_points: Vec<NavPoint>,
 }
@@ -24,19 +24,20 @@ impl Toc {
         let root_dir = fs.root_dir();
         // open the file
         let toc_file = root_dir.open_file(&toc_file_name)?;
-        info!("Opened '{}' toc", toc_file_name);
+        info!("Opened '{}'", toc_file_name);
         let mut rdr = BufReader::new(toc_file)?;
         let mut p = Parser::new();
         let lines = rdr.read_lines()?;
         let mut stack: Vec<Event> = Vec::new();
         let mut chars = String::new();
-        let mut _in_head = false;
+        let mut in_head = false;
         let mut in_doctitle = false;
         let mut _in_navmap = false;
         let mut in_navpoint = false;
         let mut nav_point: Option<NavPoint> = None;
         let mut doc_title = String::new();
         let mut nav_points: Vec<NavPoint> = Vec::new();
+        let mut meta_entries: Vec<Meta> = Vec::new();
         for ln in lines {
             p.feed_str(&ln);
             for event in &mut p {
@@ -46,7 +47,7 @@ impl Toc {
                         Event::ElementStart(tag) => {
                             trace!("Start({})", tag.name);
                             if tag.name == "head" {
-                                _in_head = true;
+                                in_head = true;
                             } else if tag.name == "navMap" {
                                 _in_navmap = true;
                             } else if tag.name == "navPoint" {
@@ -64,7 +65,7 @@ impl Toc {
                                 match last {
                                     Event::ElementStart(start_tag) => {
                                         if tag.name == "head" {
-                                            _in_head = false;
+                                            in_head = false;
                                         } else if tag.name == "navMap" {
                                             _in_navmap = false;
                                         } else if tag.name == "navPoint" {
@@ -90,6 +91,9 @@ impl Toc {
                                                 np.add_content::<IO>(&start_tag)?;
                                                 nav_point = Some(np);
                                             }
+                                        } else if tag.name == "meta" && in_head {
+                                            let m = Meta::new(&start_tag, &chars);
+                                            meta_entries.push(m);
                                         }
                                         assert!(start_tag.name == tag.name);
                                     }
@@ -103,18 +107,18 @@ impl Toc {
                                 chars += &s;
                             }
                         }
-                        Event::CDATA(s) => info!("CDATA({})", s),
-                        Event::Comment(s) => info!("Comment({})", s),
+                        Event::CDATA(s) => warn!("CDATA({})", s),
+                        Event::Comment(s) => warn!("Comment({})", s),
                     },
                     Err(e) => return Err(EPubError::XmlParseErr(e)),
                 }
             }
         }
-        info!("Finished parsing '{}' toc", toc_file_name);
+        info!("Finished parsing '{}'", toc_file_name);
         Ok(Toc {
-            uid: String::new(),
-            doc_title: doc_title,
-            nav_points: nav_points,
+            meta_entries,
+            doc_title,
+            nav_points,
         })
     }
 }

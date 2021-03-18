@@ -1,6 +1,7 @@
 //! the EPub Package Document
 //! https://www.w3.org/publishing/epub32/epub-packages.html#sec-package-doc
 
+use crate::io;
 use crate::io::BufReader;
 use crate::EPubError;
 use alloc::{string::String, vec::Vec};
@@ -17,15 +18,19 @@ pub struct Package {
     pub version: String,
     /// attribute `xml:lang`
     pub xml_lang: Option<String>,
-    prefix: Option<String>,
-    id: Option<String>,
-    dir: Option<String>,
+    //prefix: Option<String>,
+    //id: Option<String>,
+    //dir: Option<String>,
     /// `metadata` section
     pub metadata: Metadata,
     /// `manifest` section
     pub manifest: Manifest,
     /// `spine` section
     pub spine: Spine,
+    /// the base directory
+    ///
+    /// This is where the bulk of the books' files reside
+    pub base_dir: String,
 }
 
 impl Package {
@@ -34,8 +39,12 @@ impl Package {
         opf_file_name: &str,
         fs: &mut FileSystem<IO, TP, OCC>,
     ) -> Result<Package, EPubError<IO>> {
-        let root_dir = fs.root_dir();
+        // get the leading directories from the file name
+        let base_name = io::basename_and_ext(opf_file_name);
+        let mut split = opf_file_name.split(&base_name.0);
+        let base_dir = String::from(split.next().unwrap_or(""));
         // open the file
+        let root_dir = fs.root_dir();
         let mut opf_file = root_dir.open_file(&opf_file_name)?;
         info!("Opened '{}' package", opf_file_name);
         let _file_len = opf_file.seek(SeekFrom::End(0))?;
@@ -133,12 +142,13 @@ impl Package {
                     unique_identifer: uid,
                     version: ver,
                     xml_lang: xml_lang,
-                    prefix: None,
-                    id: None,
-                    dir: None,
+                    //prefix: None,
+                    //id: None,
+                    //dir: None,
                     metadata: metadata,
                     manifest: manifest,
                     spine: spine,
+                    base_dir: base_dir,
                 })
             } else {
                 panic!();
@@ -337,7 +347,7 @@ impl Identifier {
 /// Manifest section of opf file
 #[derive(Debug)]
 pub struct Manifest {
-    items: Vec<Item>,
+    pub items: Vec<Item>,
 }
 
 impl Manifest {

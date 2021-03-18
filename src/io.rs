@@ -1,9 +1,9 @@
 //! reading EPub documents
 
-use crate::EPubError;
+use crate::{io, EPubError};
 use alloc::{string::String, vec::Vec};
 use byteorder::{ByteOrder, LittleEndian};
-use fatfs::{File, OemCpConverter, Read, ReadWriteSeek, TimeProvider};
+use fatfs::{File, FileSystem, OemCpConverter, Read, ReadWriteSeek, TimeProvider};
 use log::{info, trace};
 
 /// Read data from blocks serially
@@ -246,6 +246,28 @@ pub fn split_path(path: &str) -> Vec<String> {
         }
     }
     v
+}
+
+pub fn create_dirs<IO: ReadWriteSeek, TP: TimeProvider, OCC: OemCpConverter>(
+    dir_path: &str,
+    fs: &mut FileSystem<IO, TP, OCC>,
+) -> Result<(), EPubError<IO>> {
+    let dirs = io::split_path(dir_path);
+    let mut curdir = Some(fs.root_dir());
+    for dir in dirs {
+        if let Some(cd) = curdir {
+            match cd.open_dir(&dir) {
+                Ok(cd) => {
+                    curdir = Some(cd);
+                }
+                Err(_) => {
+                    let cd = cd.create_dir(&dir)?;
+                    curdir = Some(cd);
+                }
+            }
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]

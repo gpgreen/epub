@@ -303,13 +303,6 @@ impl Container {
         let root_dir = fs.root_dir();
         let epub_file = root_dir.open_file(epub_filepath)?;
 
-        // create the disk entry file
-        info!("creating epub file entry data file");
-        let de_filename = self.expanded_file_path("fentry.txt");
-        let mut disk_entry_file = root_dir.create_file(&de_filename.as_str())?;
-        disk_entry_file.write(epub_filepath.as_bytes())?;
-        disk_entry_file.write(b"\n")?;
-
         // now expand the file
         let mut rdr = BufReader::new(epub_file)?;
         loop {
@@ -341,9 +334,6 @@ impl Container {
                                 bytes_to_go -= n;
                             }
                         }
-                        // add the file entry
-                        disk_entry_file.write(&lfh.file_name.as_bytes())?;
-                        disk_entry_file.write(b"\n")?;
                     } else if lfh.is_dir() {
                         info!("Create directory {}", lfh.file_name);
                         let dirname = self.expanded_file_path(&lfh.file_name);
@@ -368,10 +358,7 @@ impl Container {
     }
     /// create a file path under the epub directory, with the given filename
     fn expanded_file_path(&self, fname: &str) -> String {
-        let mut s = String::from(self.expanded_dir_path.as_str());
-        s.push_str("/");
-        s.push_str(fname);
-        s
+        String::from(self.expanded_dir_path.as_str()) + "/" + fname
     }
 }
 

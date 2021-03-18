@@ -98,8 +98,8 @@ fn main() {
     //////////////////////////////////////////////////////////////
 
     let epubname = String::from("RustProgrammingLanguage2018.epub");
-    let mut epub_file = EPubFile::new(epubname);
-    match epub_file.expand(EPubFile::EXPAND_DIR, &mut fs) {
+    let mut epub_file = EPubFile::new(&epubname, EPubFile::CUR_BOOK_DIR);
+    match epub_file.expand(&mut fs) {
         Ok(()) => println!("Expanded!"),
         Err(_e) => println!("error"),
     }
