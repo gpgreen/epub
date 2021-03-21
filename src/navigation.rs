@@ -32,7 +32,7 @@ impl Toc {
         let mut chars = String::new();
         let mut in_head = false;
         let mut in_doctitle = false;
-        let mut _in_navmap = false;
+        let mut in_navmap = false;
         let mut in_navpoint = false;
         let mut nav_point: Option<NavPoint> = None;
         let mut doc_title = String::new();
@@ -49,8 +49,8 @@ impl Toc {
                             if tag.name == "head" {
                                 in_head = true;
                             } else if tag.name == "navMap" {
-                                _in_navmap = true;
-                            } else if tag.name == "navPoint" {
+                                in_navmap = true;
+                            } else if tag.name == "navPoint" && in_navmap {
                                 in_navpoint = true;
                                 nav_point = Some(NavPoint::new(&tag)?);
                             } else if tag.name == "docTitle" {
@@ -67,7 +67,7 @@ impl Toc {
                                         if tag.name == "head" {
                                             in_head = false;
                                         } else if tag.name == "navMap" {
-                                            _in_navmap = false;
+                                            in_navmap = false;
                                         } else if tag.name == "navPoint" {
                                             in_navpoint = false;
                                             if let Some(np) = nav_point {
@@ -124,10 +124,10 @@ impl Toc {
 }
 
 /// NavPoint from EPub file
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct NavPoint {
     pub id: String,
-    pub play_order: String,
+    pub play_order: u32,
     pub label: String,
     pub content: String,
 }
@@ -138,7 +138,7 @@ impl NavPoint {
             Some(id_val) => match tag.attributes.get(&(String::from("playOrder"), None)) {
                 Some(order_val) => Ok(NavPoint {
                     id: String::from(id_val),
-                    play_order: String::from(order_val),
+                    play_order: order_val.parse::<u32>().unwrap(),
                     label: String::new(),
                     content: String::new(),
                 }),
@@ -224,7 +224,7 @@ mod tests {
         }
         if let Some(n) = navp {
             assert_eq!(n.id, "i1");
-            assert_eq!(n.play_order, "1");
+            assert_eq!(n.play_order, 1);
             assert_eq!(n.label, "Cover Page");
             assert_eq!(n.content, "xhtml/cover.xhtml");
         } else {

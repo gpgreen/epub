@@ -186,8 +186,8 @@ impl Package {
 #[derive(Debug)]
 pub struct Meta {
     /// name - property name
-    name: String,
-    content: String,
+    pub name: String,
+    pub content: String,
 }
 
 impl Meta {
