@@ -1,4 +1,5 @@
 // ensure_no_std/src/main.rs
+// build with cargo rustc -- -C link-arg=-nostartfiles
 #![no_std]
 #![no_main]
 #![feature(alloc_error_handler)]

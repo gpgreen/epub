@@ -9,12 +9,10 @@ edition = "2018"
 example = ["fatfs/std", "fatfs/alloc", "fatfs/chrono", "byteorder/std"]
 
 [dependencies]
-embedded-sdmmc = "0.3"
 miniz_oxide = "0.4"
 log = "0.4"
 
 [dependencies.fatfs]
-#version = "0.3"
 git = "https://github.com/rafalh/rust-fatfs"
 branch = "master"
 default-features = false

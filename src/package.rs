@@ -45,7 +45,7 @@ impl Package {
         let base_dir = String::from(split.next().unwrap_or(""));
         // open the file
         let root_dir = fs.root_dir();
-        let mut opf_file = root_dir.open_file(&opf_file_name)?;
+        let mut opf_file = root_dir.open_file(opf_file_name)?;
         info!("Opened '{}' package", opf_file_name);
         let _file_len = opf_file.seek(SeekFrom::End(0))?;
         opf_file.seek(SeekFrom::Start(0))?;
@@ -141,14 +141,14 @@ impl Package {
                 Ok(Package {
                     unique_identifer: uid,
                     version: ver,
-                    xml_lang: xml_lang,
+                    xml_lang,
                     //prefix: None,
                     //id: None,
                     //dir: None,
-                    metadata: metadata,
-                    manifest: manifest,
-                    spine: spine,
-                    base_dir: base_dir,
+                    metadata,
+                    manifest,
+                    spine,
+                    base_dir,
                 })
             } else {
                 panic!();

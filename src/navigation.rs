@@ -23,7 +23,7 @@ impl Toc {
     ) -> Result<Toc, EPubError<IO>> {
         let root_dir = fs.root_dir();
         // open the file
-        let toc_file = root_dir.open_file(&toc_file_name)?;
+        let toc_file = root_dir.open_file(toc_file_name)?;
         info!("Opened '{}'", toc_file_name);
         let mut rdr = BufReader::new(toc_file)?;
         let mut p = Parser::new();

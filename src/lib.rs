@@ -1,14 +1,29 @@
-//! # epub
+//! # epub library implemented in rust
 //! https://www.w3.org/publishing/epub32/epub-spec.html
 //!
-//! > Library for reading an epub format ebook
+//! # Usage
+//!
+//! This crate can be used by adding `epub` to the dependencies in your project's `Cargo.toml`
+//!
+//! ```toml
+//! [dependencies]
+//! epub = "0.1"
+//! ```
+//!
+//! and this in your crate root:
+//!
+//! ```rust
+//! extern crate epub;
+//! ```
 
 // ****************************************************************************
 //
 // Imports
 //
 // ****************************************************************************
-#![no_std]
+#![crate_type = "lib"]
+#![crate_name = "epub"]
+#![cfg_attr(not(feature = "std"), no_std)]
 
 pub mod container;
 pub mod io;
@@ -187,6 +202,8 @@ impl EPubFile {
     }
 
     /// expand the epub file into a directory
+    ///
+    /// uses 64k of memory while expanding the file, in Container::expand
     pub fn expand<'a, IO, TP, OCC>(
         &mut self,
         fs: &mut FileSystem<IO, TP, OCC>,
@@ -213,7 +230,7 @@ impl EPubFile {
             let root_dir = fs.root_dir();
             let file_marker_path = String::from(&self.expanded_filepath) + EPubFile::EPUB_FILE_MEMO;
             let mut epub_file_marker = root_dir.create_file(&file_marker_path)?;
-            epub_file_marker.write(&self.epub_filepath.as_bytes())?;
+            epub_file_marker.write(self.epub_filepath.as_bytes())?;
             info!("created epub file memo");
         } else {
             panic!();

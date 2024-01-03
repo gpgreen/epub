@@ -97,6 +97,7 @@ fn main() {
     }
     //////////////////////////////////////////////////////////////
 
+    println!("\nCreating EPubFile instance from file in mount");
     let epubname = String::from("RustProgrammingLanguage2018.epub");
     let mut epub_file = EPubFile::new(&epubname, EPubFile::CUR_BOOK_DIR);
     match epub_file.expand(&mut fs) {
@@ -106,6 +107,7 @@ fn main() {
 
     //////////////////////////////////////////////////////////////
 
+    println!("\nReading EPubFile.container from EPubFile instance");
     match epub_file.read_container(&mut fs) {
         Ok(()) => println!("container read!"),
         Err(_e) => println!("error"),

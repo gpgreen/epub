@@ -3,7 +3,7 @@
 
 use crate::io::BufReader;
 use crate::EPubError;
-use alloc::{string::String, vec::Vec};
+use alloc::{boxed::Box, string::String, vec::Vec};
 use fatfs::{File, FileSystem, OemCpConverter, ReadWriteSeek, TimeProvider, Write};
 use log::{info, trace};
 use miniz_oxide::inflate::{core, TINFLStatus};
@@ -153,13 +153,15 @@ impl LocalFileHeader {
     }
 
     /// inflate compressed data from a BufReader into a file
+    ///
+    /// uses a lot of memory, 2x32k buffers
     pub fn inflate<IO: ReadWriteSeek, TP: TimeProvider, OCC: OemCpConverter>(
         &self,
         rdr: &mut BufReader<IO, TP, OCC>,
         output_file: &mut File<IO, TP, OCC>,
     ) -> Result<usize, EPubError<IO>> {
-        let mut input: [u8; 32768] = [0; 32768];
-        let mut output: [u8; 32768] = [0; 32768];
+        let mut input: Box<[u8; 32768]> = Box::new([0; 32768]);
+        let mut output: Box<[u8; 32768]> = Box::new([0; 32768]);
         let mut decomp = core::DecompressorOxide::new();
         decomp.init();
         info!(
@@ -181,7 +183,7 @@ impl LocalFileHeader {
             while keep_looping {
                 // following should loop until all input consumed
                 let (status, in_consumed, out_consumed) =
-                    core::decompress(&mut decomp, &input[in_start..n], &mut output, 0, flags);
+                    core::decompress(&mut decomp, &input[in_start..n], &mut *output, 0, flags);
                 trace!(
                     "inflate [status {:?} incoming {} bytes outgoing {} bytes]",
                     status,
@@ -319,7 +321,7 @@ impl Container {
                     if lfh.is_file() {
                         info!("Create file {}", lfh.file_name);
                         let filename = self.expanded_file_path(&lfh.file_name);
-                        let mut this_file = root_dir.create_file(&filename.as_str())?;
+                        let mut this_file = root_dir.create_file(filename.as_str())?;
                         // write the file, either compressed or not
                         if lfh.compression_method == 8 {
                             lfh.inflate(&mut rdr, &mut this_file)?;
@@ -337,7 +339,7 @@ impl Container {
                     } else if lfh.is_dir() {
                         info!("Create directory {}", lfh.file_name);
                         let dirname = self.expanded_file_path(&lfh.file_name);
-                        root_dir.create_dir(&dirname.as_str())?;
+                        root_dir.create_dir(dirname.as_str())?;
                     }
                 }
                 if lfh.have_data_descriptor() {
@@ -356,7 +358,7 @@ impl Container {
 
         Ok(())
     }
-    /// create a file path under the epub directory, with the given filename
+    /// create a file path string: expanded_dir_path/fname
     fn expanded_file_path(&self, fname: &str) -> String {
         String::from(self.expanded_dir_path.as_str()) + "/" + fname
     }

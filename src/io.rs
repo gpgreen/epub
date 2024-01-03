@@ -1,4 +1,8 @@
 //! reading EPub documents
+//!
+//! BufReader uses 2 buffers to read a file
+//! the cursor will advance and automatically swap in the blocks as the cursor advances
+//! the cursor cannot go backwards
 
 use crate::{io, EPubError};
 use alloc::{string::String, vec::Vec};
@@ -207,7 +211,7 @@ where
             }
             self.block_idx ^= 1;
         }
-        if ln.len() > 0 {
+        if !ln.is_empty() {
             lines.push(alloc::string::String::from_utf8(ln)?);
         }
         trace!("read_lines count {}", lines.len());
@@ -240,14 +244,15 @@ pub fn basename_and_ext(path: &str) -> (String, String) {
 /// function to split paths up into directory(s) and filename
 pub fn split_path(path: &str) -> Vec<String> {
     let mut v = Vec::new();
-    for chunk in path.split("/") {
-        if chunk.len() > 0 {
+    for chunk in path.split('/') {
+        if !chunk.is_empty() {
             v.push(String::from(chunk));
         }
     }
     v
 }
 
+/// function to create all directories in dir_path, if they don't exist
 pub fn create_dirs<IO: ReadWriteSeek, TP: TimeProvider, OCC: OemCpConverter>(
     dir_path: &str,
     fs: &mut FileSystem<IO, TP, OCC>,
